@@ -1,0 +1,7 @@
+aiohttp
+PyMuPDF
+pandas
+langchain
+langchain-openai
+qdrant-client
+fastapi
