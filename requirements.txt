@@ -1,0 +1,12 @@
+aiohttp
+anthropic
+fastapi
+langchain
+langchain-openai
+pandas
+pyarrow
+pymupdf
+python-dotenv
+qdrant-client
+tqdm
+uvicorn
