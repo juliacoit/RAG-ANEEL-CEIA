@@ -2,6 +2,8 @@
 
 Sistema de perguntas e respostas sobre a legislação do setor elétrico brasileiro, baseado na arquitetura RAG (Retrieval-Augmented Generation). Permite consultas em linguagem natural sobre atos normativos da ANEEL, com respostas citando a fonte exata e sem alucinações.
 
+> **Fonte dos dados (Fase 1):** O plano original era extrair texto dos PDFs completos, mas o site da ANEEL bloqueia scripts automatizados via Cloudflare (apenas 29 de ~17 mil PDFs foram baixados). A solução adotada foi usar as **ementas** do JSON de metadados — resumos oficiais de cada ato normativo. O sistema cobre 15.528 atos (anos 2016, 2021 e 2022) e responde bem a perguntas do tipo "do que trata tal ato" ou "quais atos falam sobre PCH". Perguntas sobre artigos específicos ficam fora do escopo até que os PDFs completos sejam obtidos por outro meio.
+
 ---
 
 ## Stack
@@ -13,7 +15,7 @@ Sistema de perguntas e respostas sobre a legislação do setor elétrico brasile
 | Embeddings | OpenAI `text-embedding-3-small` |
 | LLMs | Claude 3.5 Sonnet / GPT-4o |
 | API | FastAPI |
-| Extração PDF | PyMuPDF |
+| Extração PDF | PyMuPDF (PDFs) / ementas do JSON (atual) |
 | Serialização | Parquet |
 
 ---
@@ -21,25 +23,23 @@ Sistema de perguntas e respostas sobre a legislação do setor elétrico brasile
 ## Arquitetura
 
 ```
-JSON (metadados ANEEL)
+JSON (metadados ANEEL: ementas, datas, tipos)
         │
         ▼
-downloader.py  ──►  data/raw/*.pdf
+limpar_json_aneel.py  ──►  data/aneel_limpo_completo.json
         │
         ▼
-parser.py      ──►  texto limpo
+chunker_json.py       ──►  data/processed/chunks_json_todos.parquet
+                            (16.167 chunks · 15.528 atos · 2016/2021/2022)
         │
         ▼
-chunker.py     ──►  data/processed/chunks.parquet
-        │
-        ▼
-vector_db.py   ──►  Qdrant (vetores + BM25 indexados)
+vector_db.py          ──►  Qdrant (vetores + BM25 indexados)
         │
         ▼  (em produção)
 hybrid_search.py  ◄──  pergunta do usuário
         │
         ▼
-llm_chain.py   ──►  resposta com citação
+llm_chain.py      ──►  resposta com citação
         │
         ▼
 main.py (FastAPI)  ──►  POST /query → JSON
@@ -52,23 +52,27 @@ main.py (FastAPI)  ──►  POST /query → JSON
 ```
 RAG-ANEEL-CEIA/
 ├── data/
-│   ├── raw/            # JSON de metadados + PDFs baixados (PDFs não versionados)
-│   ├── processed/      # Chunks em .parquet (não versionados)
-│   └── samples/        # Amostra para testes rápidos (50–200 chunks)
+│   ├── raw/                        # JSON de metadados original
+│   ├── processed/                  # Chunks em .parquet (não versionados)
+│   │   └── chunks_json_todos.parquet  # 16.167 chunks prontos para indexação
+│   ├── aneel_limpo_completo.json   # Metadados limpos (todos os atos)
+│   ├── aneel_vigentes_completo.json
+│   └── samples/                    # Amostra para testes rápidos
 ├── src/
-│   ├── ingestion/
-│   │   ├── downloader.py    # Download assíncrono dos PDFs
-│   │   ├── parser.py        # Extração e limpeza de texto
-│   │   └── chunker.py       # Fatiamento em chunks com overlap
+│   ├── p1_ingestion/
+│   │   ├── limpar_json_aneel.py    # Limpeza e filtragem do JSON de metadados
+│   │   ├── chunker_json.py         # Geração de chunks a partir das ementas (principal)
+│   │   ├── baixar_pdfs_aneel.py    # Tentativa de download dos PDFs (bloqueado por Cloudflare)
+│   │   └── parser.py               # Extração de texto de PDFs (para uso futuro)
 │   ├── retrieval/
-│   │   ├── vector_db.py     # Indexação no Qdrant
-│   │   └── hybrid_search.py # Busca vetorial + BM25 com fusão RRF
+│   │   ├── vector_db.py            # Indexação no Qdrant
+│   │   └── hybrid_search.py        # Busca vetorial + BM25 com fusão RRF
 │   ├── api/
-│   │   ├── main.py          # Endpoints FastAPI
-│   │   └── llm_chain.py     # Prompt engineering e chamada ao LLM
-│   └── utils/               # Logger, helpers, constantes
+│   │   ├── main.py                 # Endpoints FastAPI
+│   │   └── llm_chain.py            # Prompt engineering e chamada ao LLM
+│   └── utils/                      # Logger, helpers, constantes
 ├── tests/
-├── docs/                    # ADRs, benchmarks, análises de custo
+├── docs/                           # ADRs, benchmarks, RELATORIO_FASE_1.md
 ├── requirements.txt
 ├── .env.example
 └── .gitignore
@@ -111,29 +115,22 @@ TOP_K_RETRIEVAL=5
 LLM_MODEL=claude-3-5-sonnet-20241022
 ```
 
-### 3. Processar metadados
+### 3. Limpar e processar o JSON de metadados
 
 ```bash
-python src/limpar_json_aneel.py \
-  --input data/raw/biblioteca_aneel_gov_br_legislacao_2016_metadados.json \
-  --output data/raw/
-# Gera: data/raw/aneel_limpo.json e data/raw/aneel_vigentes.json
+python src/p1_ingestion/limpar_json_aneel.py
+# Gera: data/aneel_limpo_completo.json e data/aneel_vigentes_completo.json
 ```
 
-### 4. Baixar os PDFs
+### 4. Gerar chunks a partir das ementas
 
 ```bash
-python src/ingestion/downloader.py --input data/raw/aneel_limpo.json
-# Destino: data/raw/*.pdf  (não versionados no Git)
+python src/p1_ingestion/chunker_json.py
+# Gera: data/processed/chunks_json_todos.parquet
+# 16.167 chunks · 15.528 atos normativos (2016, 2021, 2022)
 ```
 
-### 5. Extrair texto e gerar chunks
-
-```bash
-python src/ingestion/parser.py
-python src/ingestion/chunker.py
-# Gera: data/processed/chunks.parquet
-```
+> **Nota:** O download dos PDFs completos (`baixar_pdfs_aneel.py`) foi bloqueado pelo Cloudflare do site da ANEEL. Os chunks atuais são baseados nas ementas (resumos oficiais) do JSON de metadados. Veja `docs/RELATORIO_FASE_1.md` para detalhes.
 
 ### 6. Indexar no Qdrant
 
@@ -166,6 +163,6 @@ O sistema é avaliado por três métricas (resultados em `docs/`):
 
 | Papel | Responsabilidade |
 |---|---|
-| Data Engineer | Ingestão, parsing de PDFs, chunking |
+| Data Engineer | Ingestão, chunking por ementas ✅ (Fase 1 concluída) |
 | Search Engineer | Indexação vetorial, busca híbrida |
 | AI Architect | API, prompt engineering, benchmark |

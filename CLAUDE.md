@@ -8,6 +8,15 @@ Guia de contexto para o agente Claude Code trabalhar no projeto RAG ANEEL: siste
 
 Sistema RAG (Retrieval-Augmented Generation) que permite consultas em linguagem natural sobre atos normativos da ANEEL (Resoluções, Portarias, Despachos), retornando respostas com citação direta da fonte e zero alucinações.
 
+### Status das Fases
+
+- **Fase 1 (Ingestão) — CONCLUÍDA:** Os chunks estão prontos em `data/processed/chunks_json_todos.parquet` (16.167 chunks, 15.528 atos, anos 2016/2021/2022). A fonte dos chunks são as **ementas** do JSON de metadados — não os PDFs completos. O download dos PDFs foi bloqueado pelo Cloudflare do site da ANEEL (apenas 29 de ~17 mil baixaram). Ver `docs/RELATORIO_FASE_1.md`.
+- **Fase 2 (Indexação/Retrieval) — em andamento**
+- **Fase 3 (API/LLM) — em andamento**
+
+### Limitação conhecida
+O sistema responde bem a perguntas sobre o tema e escopo dos atos ("do que trata tal resolução", "quais atos falam sobre PCH"). Perguntas sobre artigos ou incisos específicos não são respondíveis com a base atual — requerem os PDFs completos, que precisam ser obtidos por outro meio (ex: acesso direto, scraping manual, fonte alternativa).
+
 ---
 
 ## Stack Tecnológica
@@ -29,16 +38,20 @@ Sistema RAG (Retrieval-Augmented Generation) que permite consultas em linguagem 
 ## Estrutura de Pastas
 
 ```
-rag-aneel-2016/
+RAG-ANEEL-CEIA/
 ├── data/
-│   ├── raw/          # PDFs originais + JSON de metadados (PDFs não versionados)
-│   ├── processed/    # Chunks em .parquet (não versionados)
-│   └── samples/      # Amostra de 50–200 chunks para testes rápidos
+│   ├── raw/                         # JSON de metadados original
+│   ├── processed/                   # Chunks em .parquet (não versionados)
+│   │   └── chunks_json_todos.parquet   # 16.167 chunks prontos para indexação
+│   ├── aneel_limpo_completo.json    # Metadados limpos (todos os atos)
+│   ├── aneel_vigentes_completo.json
+│   └── samples/                     # Amostra de 50–200 chunks para testes rápidos
 ├── src/
-│   ├── ingestion/
-│   │   ├── downloader.py   # Download assíncrono dos PDFs
-│   │   ├── parser.py       # Extração e limpeza de texto via PyMuPDF
-│   │   └── chunker.py      # Fatiamento com RecursiveCharacterTextSplitter
+│   ├── p1_ingestion/
+│   │   ├── limpar_json_aneel.py    # Limpeza e filtragem do JSON de metadados
+│   │   ├── chunker_json.py         # Geração de chunks a partir das ementas (principal)
+│   │   ├── baixar_pdfs_aneel.py    # Download de PDFs (bloqueado por Cloudflare — não usar)
+│   │   └── parser.py               # Extração de texto de PDFs (para uso futuro)
 │   ├── retrieval/
 │   │   ├── vector_db.py    # Conexão Qdrant, geração de embeddings, upsert
 │   │   └── hybrid_search.py # Busca híbrida vetorial + BM25 com RRF
@@ -64,16 +77,14 @@ rag-aneel-2016/
 ## Pipeline de Execução
 
 ```
-JSON metadados
+JSON metadados (ementas, datas, tipos)
     │
     ▼
-downloader.py  →  data/raw/*.pdf
+limpar_json_aneel.py  →  data/aneel_limpo_completo.json
     │
     ▼
-parser.py      →  texto limpo (memória)
-    │
-    ▼
-chunker.py     →  data/processed/chunks.parquet
+chunker_json.py  →  data/processed/chunks_json_todos.parquet
+                     (16.167 chunks · 15.528 atos · 2016/2021/2022)
     │
     ▼
 vector_db.py   →  Qdrant (vetores + BM25 indexados)
@@ -116,22 +127,26 @@ main.py (FastAPI)  →  POST /query → JSON
 
 ## Módulos e Responsabilidades
 
-### `src/ingestion/downloader.py`
-- Download assíncrono com `asyncio` + `aiohttp`
-- Controle de concorrência via semáforo (não sobrecarregar o servidor ANEEL)
-- Nomes de arquivo padronizados: `resolucao_normativa_687_2016.pdf`
-- Retentativas em erros de rede
+### `src/p1_ingestion/limpar_json_aneel.py`
+- Lê o JSON de metadados bruto da ANEEL
+- Filtra e normaliza campos (datas, tipos de ato, URLs)
+- Gera `data/aneel_limpo_completo.json` e `data/aneel_vigentes_completo.json`
 
-### `src/ingestion/parser.py`
-- Extração com PyMuPDF preservando ordem de leitura (atenção a PDFs com duas colunas)
-- Limpar: cabeçalhos/rodapés repetidos, hifenizações, espaços duplos, linhas em branco
-- Sinalizar páginas com baixa qualidade (PDFs escaneados sem OCR)
+### `src/p1_ingestion/chunker_json.py` — principal da Fase 1
+- Lê as ementas de `aneel_limpo_completo.json`
+- Gera chunks usando `RecursiveCharacterTextSplitter` do LangChain
+- Chunk size: `CHUNK_SIZE` (600 tokens), overlap: `CHUNK_OVERLAP` (90 tokens, ~15%)
+- Cada chunk carrega metadados: número do ato, tipo, data, URL
+- Output: `data/processed/chunks_json_todos.parquet` (16.167 chunks · 2,4 MB)
 
-### `src/ingestion/chunker.py`
-- `RecursiveCharacterTextSplitter` do LangChain
-- Chunk size: `CHUNK_SIZE` (padrão 600 tokens), overlap: `CHUNK_OVERLAP` (padrão 90 tokens, ~15%)
-- Cada chunk carrega metadados: número do ato, tipo, data, URL, página
-- Output: `.parquet` em `data/processed/`
+### `src/p1_ingestion/baixar_pdfs_aneel.py` — NÃO USAR
+- Script de download dos PDFs completos
+- Bloqueado pelo Cloudflare do site da ANEEL (apenas 29 de ~17 mil baixaram)
+- Mantido no repo para referência/tentativas futuras
+
+### `src/p1_ingestion/parser.py` — para uso futuro
+- Extração de texto de PDFs via PyMuPDF
+- Não utilizado na pipeline atual (depende dos PDFs completos)
 
 ### `src/retrieval/vector_db.py`
 - Collection Qdrant: 1536 dimensões, distância cosseno, índice BM25
@@ -204,7 +219,8 @@ LLM_MODEL=claude-3-5-sonnet-20241022
 | Embeddings | `text-embedding-3-small` | Custo-benefício: qualidade suficiente a menor custo que `large` |
 | Fusão de rankings | RRF | Elimina necessidade de normalizar scores de origens diferentes |
 | Serialização | Parquet | Leitura colunar rápida, tipos nativos, compressão eficiente vs. CSV |
-| Download | aiohttp assíncrono | Dezenas de PDFs em paralelo sem bloquear o processo |
+| Download de PDFs | Bloqueado (Cloudflare) | Site da ANEEL bloqueia automação — plano B: ementas do JSON |
+| Fonte dos chunks | Ementas do JSON | PDFs inacessíveis via automação; ementas cobrem tema/escopo dos atos |
 | Anti-alucinação | Instrução de recusa explícita no prompt | Garante que o modelo não infere além do contexto |
 
 ---
