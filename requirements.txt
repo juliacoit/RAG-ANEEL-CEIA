@@ -1,12 +1,41 @@
-aiohttp
-anthropic
-fastapi
-langchain
-langchain-openai
-pandas
-pyarrow
-pymupdf
-python-dotenv
-qdrant-client
-tqdm
-uvicorn
+# RAG ANEEL — dependências do projeto
+# Instalar: pip install -r requirements.txt
+
+# ── Dados e processamento ──────────────────────────────
+pandas>=2.0.0
+pyarrow>=14.0.0               # leitura/escrita de Parquet
+numpy>=1.26.0
+
+# ── Chunking (P1) ──────────────────────────────────────
+langchain-text-splitters>=0.2.0
+# fallback: langchain>=0.1.0 (versões antigas)
+
+# ── Embeddings locais (P2) ─────────────────────────────
+sentence-transformers>=3.0.0  # paraphrase-multilingual-MiniLM-L12-v2
+                               # baixa ~120MB na primeira execução
+
+# ── Vector Store (P2) ──────────────────────────────────
+qdrant-client>=1.9.0          # cliente Qdrant (requer Docker rodando)
+
+# ── Busca esparsa BM25 (P2) ───────────────────────────
+rank-bm25>=0.2.2
+
+# ── LLM — geração de respostas (P3) ───────────────────
+anthropic>=0.30.0             # Claude (claude-3-5-sonnet-20241022)
+# openai>=1.40.0              # GPT-4o (alternativa — requer créditos)
+
+# ── API (P3) ───────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn>=0.30.0
+
+# ── Utilitários ────────────────────────────────────────
+python-dotenv>=1.0.0          # carrega .env com as API keys
+tqdm>=4.66.0                  # barras de progresso
+
+# ── Download de PDFs (P1 — opcional, bloqueado pelo Cloudflare) ──
+# playwright>=1.44.0
+# playwright-stealth>=2.0.0
+# pip install playwright && playwright install chromium
+
+# ── Parser de PDFs (P1 — aguardando PDFs) ─────────────
+# pymupdf>=1.24.0             # pip install pymupdf
