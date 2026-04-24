@@ -33,6 +33,11 @@ websockets<12
 python-dotenv>=1.0.0          # carrega .env com as API keys
 tqdm>=4.66.0                  # barras de progresso
 
+# interface gráfica
+
+streamlit
+requests
+
 # ── Download de PDFs (P1 — opcional, bloqueado pelo Cloudflare) ──
 # playwright>=1.44.0
 # playwright-stealth>=2.0.0

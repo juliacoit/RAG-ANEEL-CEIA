@@ -134,6 +134,7 @@ class QueryResponse(BaseModel):
     tokens_resposta: int
     latencia_total_ms: int
     latencia_llm_ms: int
+    system_prompt: str
 
 
 class HealthResponse(BaseModel):
@@ -213,6 +214,7 @@ def query(req: QueryRequest):
         tokens_resposta=resultado.tokens_resposta,
         latencia_total_ms=latencia_total,
         latencia_llm_ms=resultado.latencia_ms,
+        system_prompt=resultado.system_prompt,
     )
 
 
@@ -231,5 +233,5 @@ def health():
         status="ok",
         qdrant_chunks=count,
         bm25_docs=len(_estado["bm25_ids"]),
-        modelo_llm=os.getenv("LLM_MODEL", "gemini-2.0-flash"),
+        modelo_llm=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
     )

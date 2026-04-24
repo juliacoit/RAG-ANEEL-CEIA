@@ -18,6 +18,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from src.utils.logger_metrics import salvar_log
 
 from groq import Groq
 from dotenv import load_dotenv
@@ -36,11 +37,27 @@ MAX_TOKENS = 1024
 
 SYSTEM_PROMPT = """Você é um especialista em regulação do setor elétrico brasileiro.
 Responda EXCLUSIVAMENTE com base nos trechos fornecidos abaixo.
+
+Liste explicitamente todos os atos normativos relevantes encontrados no contexto.
+
+Para cada ato citado:
+- informe o número e ano
+- descreva brevemente o que ele trata
+- cite explicitamente a fonte
+
+NÃO inclua atos que não estejam claramente presentes nos trechos.
+
+Se não houver evidência suficiente, responda:
+"Não encontrado nos atos normativos consultados."
 Toda afirmação deve citar o ato normativo de origem (ex: "conforme o Art. 3º
 da Resolução Normativa ANEEL nº 687/2016").
 Se a informação não constar nos documentos, responda:
 "Não encontrado nos atos normativos consultados."
 Nunca infira, suponha ou complete com conhecimento externo."""
+
+FALLBACK_MSG = "Não encontrado nos atos normativos consultados."
+
+SYSTEM_PROMPT_VERSION = "V2"
 
 _client_cache: Groq | None = None
 
@@ -95,6 +112,7 @@ class RespostaLLM:
     tokens_prompt: int
     tokens_resposta: int
     latencia_ms: int
+    system_prompt: str
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +131,7 @@ def gerar_resposta(pergunta: str, chunks: list[dict]) -> RespostaLLM:
     """
     if not chunks:
         return RespostaLLM(
-            texto="Não encontrado nos atos normativos consultados.",
+            texto=FALLBACK_MSG,
             modelo=MODELO,
             tokens_prompt=0,
             tokens_resposta=0,
@@ -146,14 +164,69 @@ def gerar_resposta(pergunta: str, chunks: list[dict]) -> RespostaLLM:
         f"tokens=({tokens_prompt}p + {tokens_resp}r)"
     )
 
+    texto_resposta = resposta.choices[0].message.content
+    avaliacao = avaliar_resposta(texto_resposta, chunks)
+    fallback = int(texto_resposta.strip() == FALLBACK_MSG)
+
+    log_data = {
+    "query": pergunta,
+
+    "system_prompt": SYSTEM_PROMPT,
+    "system_prompt_version": SYSTEM_PROMPT_VERSION,
+    "user_prompt": prompt,
+
+    # resposta
+    "response": texto_resposta,
+
+    # chunks (recomendo versão reduzida)
+    "chunks": [
+        {
+            "doc_id": c.get("doc_id"),
+            "tipo": c.get("tipo_nome"),
+            "numero": c.get("numero"),
+            "ano": c.get("ano"),
+            "score": c.get("score_final"),
+        }
+        for c in chunks
+    ],
+
+    "num_chunks": len(chunks),
+
+    # métricas
+    "latency_ms": latencia_ms,
+    "tokens_prompt": tokens_prompt,
+    "tokens_response": tokens_resp,
+    "model": MODELO,
+    "temperature": TEMPERATURA,
+
+    # avaliação
+    "fallback": fallback,
+    **avaliacao
+}
+
+    salvar_log(log_data)
+
     return RespostaLLM(
-        texto=resposta.choices[0].message.content,
+        texto=texto_resposta,
         modelo=MODELO,
         tokens_prompt=tokens_prompt,
         tokens_resposta=tokens_resp,
         latencia_ms=latencia_ms,
+        system_prompt=SYSTEM_PROMPT
     )
 
+def avaliar_resposta(resposta: str, chunks: list[dict]) -> dict:
+    contexto_texto = " ".join([c.get("texto", "") for c in chunks])
+
+    # heurística simples
+    faithfulness = int(any(trecho in contexto_texto for trecho in resposta.split(".")))
+
+    citation_ok = int("Resolução" in resposta or "Art." in resposta)
+
+    return {
+        "faithfulness": faithfulness,
+        "citation_accuracy": citation_ok,
+    }
 
 # ---------------------------------------------------------------------------
 # Teste rápido (rodar direto)
