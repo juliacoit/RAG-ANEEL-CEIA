@@ -1,6 +1,4 @@
 # ── Dados grandes — gerar localmente rodando o pipeline ──────────────
-data/aneel_limpo_completo.json
-data/aneel_vigentes_completo.json
 
 # Parquets gerados pelo pipeline P1 (grandes — gerar localmente)
 data/processed/chunks_pdf_completo.parquet
