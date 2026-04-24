@@ -10,9 +10,9 @@ Sistema RAG (Retrieval-Augmented Generation) que permite consultas em linguagem 
 
 ### Status das Fases
 
-- **Fase 1 (Ingestão) — CONCLUÍDA:** Os chunks estão prontos em `data/processed/chunks_json_todos.parquet` (16.167 chunks, 15.528 atos, anos 2016/2021/2022). A fonte dos chunks são as **ementas** do JSON de metadados — não os PDFs completos. O download dos PDFs foi bloqueado pelo Cloudflare do site da ANEEL (apenas 29 de ~17 mil baixaram). Ver `docs/RELATORIO_FASE_1.md`.
-- **Fase 2 (Indexação/Retrieval) — em andamento**
-- **Fase 3 (API/LLM) — em andamento**
+- **Fase 1 (Ingestão) — :** Os chunks estão prontos em `data/processed/chunks_json_todos.parquet` (16.167 chunks, 15.528 atos, anos 2016/2021/2022). A fonte dos chunks são as **ementas** do JSON de metadados — Download dos PDFS em andamento. Ver `docs/RELATORIO_FASE_1.md`.
+- **Fase 2 (Indexação/Retrieval) — em andamento**: Indexação no Qdrant concluído, porém apenas com as ementas, os pdfs ainda nao foram implementados.
+- **Fase 3 (API/LLM) — em andamento**: API rodando e modelo respondendo, porém não tem contexto suficiente devido a falta dos PDFs baixados.
 
 ### Limitação conhecida
 O sistema responde bem a perguntas sobre o tema e escopo dos atos ("do que trata tal resolução", "quais atos falam sobre PCH"). Perguntas sobre artigos ou incisos específicos não são respondíveis com a base atual — requerem os PDFs completos, que precisam ser obtidos por outro meio (ex: acesso direto, scraping manual, fonte alternativa).
@@ -27,7 +27,7 @@ O sistema responde bem a perguntas sobre o tema e escopo dos atos ("do que trata
 | Orquestração | LangChain |
 | Vector Store | Qdrant (busca híbrida: vetorial + BM25) |
 | Embeddings | OpenAI `text-embedding-3-small` (1536 dims) |
-| LLMs | Claude 3.5 Sonnet (`claude-3-5-sonnet-20241022`) / GPT-4o |
+| LLMs | Llama 3.3 70b versatile (`llama-3.3-70b-versatile`) / GPT-4o |
 | API | FastAPI + Uvicorn |
 | Serialização | Parquet (via pandas + pyarrow) |
 | Download | aiohttp + asyncio |
@@ -191,13 +191,13 @@ Sempre ler do `.env` via `python-dotenv`. Nunca commitar o `.env` real.
 
 ```env
 OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
+GROQ_API_KEY=sk-ant-...
 QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=
 CHUNK_SIZE=600
 CHUNK_OVERLAP=90
 TOP_K_RETRIEVAL=5
-LLM_MODEL=claude-3-5-sonnet-20241022
+LLM_MODEL=llama-3.3-70b-versatile
 ```
 
 ---
