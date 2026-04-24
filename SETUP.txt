@@ -1,0 +1,304 @@
+================================================================================
+RAG ANEEL — SETUP COMPLETO
+Guia de dependências externas e configuração do ambiente
+================================================================================
+
+Este arquivo documenta tudo que precisa ser instalado/configurado manualmente
+antes de rodar o pipeline. Leia com atenção antes de começar.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. PYTHON
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Versão recomendada: Python 3.11 ou 3.12
+(Python 3.14 pode ter incompatibilidades com algumas libs)
+
+Download: https://www.python.org/downloads/
+
+Após instalar:
+  python --version   # deve mostrar 3.11.x ou 3.12.x
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. DEPENDÊNCIAS PYTHON
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Instalar todas de uma vez:
+  pip install -r requirements.txt
+
+Se der erro em alguma lib específica, instalar individualmente:
+  pip install pymupdf pdfplumber
+  pip install sentence-transformers
+  pip install qdrant-client rank-bm25
+  pip install curl_cffi
+  pip install langchain-text-splitters
+  pip install pandas pyarrow numpy
+  pip install beautifulsoup4 openpyxl rarfile
+  pip install python-dotenv tqdm
+  pip install anthropic fastapi uvicorn
+
+ATENÇÃO — sentence-transformers:
+  Baixa o modelo paraphrase-multilingual-MiniLM-L12-v2 (~120MB)
+  na primeira execução do p2_indexar.py. Fica em cache após isso.
+  Precisa de conexão com internet na primeira vez.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. DOCKER — para o Qdrant (banco vetorial)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Download Docker Desktop: https://www.docker.com/products/docker-desktop/
+
+Após instalar e abrir o Docker Desktop, subir o Qdrant:
+  docker compose up -d
+
+Verificar se está rodando:
+  docker ps
+  # deve mostrar container qdrant com status "Up"
+
+Acessar o dashboard do Qdrant (opcional):
+  http://localhost:6333/dashboard
+
+IMPORTANTE: o Docker Desktop deve estar aberto antes de rodar qualquer
+script que use o Qdrant (p2_indexar.py, agente P3).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. POPPLER — para OCR de PDFs escaneados
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Poppler é uma biblioteca de renderização de PDF necessária para converter
+páginas de PDF em imagens antes de aplicar OCR com Tesseract.
+
+NÃO instalar no sistema — instalar dentro da pasta do projeto:
+
+Passo 1: Baixar o Poppler para Windows
+  URL: https://github.com/oschwartz10612/poppler-windows/releases
+  Arquivo: Release-XX.XX.X-0.zip (versão mais recente)
+
+Passo 2: Extrair na pasta do projeto com esta estrutura exata:
+  RAG-ANEEL-CEIA/
+  └── poppler/
+      └── Library/
+          └── bin/
+              ├── pdftoppm.exe   ← arquivo principal
+              ├── pdfinfo.exe
+              └── ... (outros executáveis)
+
+Passo 3: Verificar se está correto:
+  python -c "
+  from pdf2image import convert_from_path
+  from pathlib import Path
+  poppler = Path('poppler/Library/bin')
+  print('Poppler encontrado:', poppler.exists())
+  "
+
+O parser.py já está configurado para encontrar o Poppler neste caminho
+automaticamente — não é necessário adicionar ao PATH do sistema.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. TESSERACT — motor de OCR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tesseract é o motor de OCR usado para extrair texto de PDFs escaneados.
+Diferente do Poppler, este precisa ser instalado no sistema.
+
+Download: https://github.com/UB-Mannheim/tesseract/wiki
+Arquivo: tesseract-ocr-w64-setup-5.x.x.exe (versão 64-bit)
+
+Durante a instalação:
+  - Selecionar "Additional language data" → marcar "Portuguese"
+  - Instalar no caminho padrão: C:\Program Files\Tesseract-OCR\
+
+Verificar instalação:
+  tesseract --version
+  # deve mostrar: tesseract 5.x.x
+
+Se o comando não for reconhecido, adicionar ao PATH:
+  C:\Program Files\Tesseract-OCR\
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. 7-ZIP — para extração de arquivos RAR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Necessário para extrair arquivos .rar que alguns atos normativos usam.
+
+Download: https://www.7-zip.org/
+Instalar no caminho padrão: C:\Program Files\7-Zip\
+
+O script baixar_pdfs_aneel.py já está configurado para usar este caminho.
+
+Verificar:
+  "C:\Program Files\7-Zip\7z.exe" --version
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. VARIÁVEIS DE AMBIENTE (.env)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Criar o arquivo .env na raiz do projeto (copiar do env.example):
+  copy env.example .env
+
+Editar o .env e preencher:
+  ANTHROPIC_API_KEY=sk-ant-sua-chave-aqui
+
+A chave da Anthropic é usada pela P3 para gerar respostas com Claude.
+Obter em: https://console.anthropic.com/
+
+NUNCA commitar o .env no git — ele já está no .gitignore.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. ESTRUTURA DE PASTAS ESPERADA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Após o setup completo, o projeto deve ter esta estrutura:
+
+RAG-ANEEL-CEIA/
+├── data/
+│   ├── raw/                          ← JSONs brutos da ANEEL (versionar)
+│   │   ├── biblioteca_aneel_..._2016_metadados.json
+│   │   ├── biblioteca_aneel_..._2021_metadados.json
+│   │   └── biblioteca_aneel_..._2022_metadados.json
+│   ├── aneel_vigentes_completo.json  ← gerado pelo pipeline (não versionar)
+│   └── processed/
+│       ├── chunks_json_todos.parquet          ← ementas (2.4MB — pode versionar)
+│       ├── chunks_pdf_completo.parquet        ← PDFs (grande — não versionar)
+│       └── chunks_completo_unificado.parquet  ← unificado (111MB — não versionar)
+├── db/
+│   └── bm25/
+│       ├── bm25_index.pkl   ← gerado pelo p2_indexar.py
+│       └── bm25_ids.pkl
+├── pdfs/                    ← ~27k arquivos baixados (não versionar)
+│   ├── 2015/
+│   ├── 2016/
+│   ├── 2021/
+│   └── 2022/
+├── poppler/                 ← Poppler local (não versionar)
+│   └── Library/bin/
+├── src/
+│   ├── p1_ingestion/
+│   │   ├── limpar_json_aneel.py
+│   │   ├── baixar_pdfs_aneel.py
+│   │   ├── chunker_json.py
+│   │   ├── parser.py
+│   │   └── unir_parquets.py
+│   ├── p2_search/
+│   │   └── p2_indexar.py
+│   └── p3_agent/            ← pasta para a P3 criar
+│       └── agente.py        ← a P3 implementa aqui
+├── .env                     ← NUNCA versionar
+├── .gitignore
+├── docker-compose.yml
+├── env.example
+├── requirements.txt
+├── setup_pipeline.py
+└── SETUP.txt                ← este arquivo
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. PASSO A PASSO PARA A P3 — USANDO O SISTEMA PRONTO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+O pipeline P1 + P2 já foi executado. A P3 precisa apenas:
+
+Passo 1 — Clonar o repositório
+  git clone <url-do-repo>
+  cd RAG-ANEEL-CEIA
+
+Passo 2 — Instalar dependências Python
+  pip install -r requirements.txt
+
+Passo 3 — Criar o .env
+  copy env.example .env
+  # editar .env e adicionar ANTHROPIC_API_KEY
+
+Passo 4 — Subir o Qdrant (Docker Desktop deve estar aberto)
+  docker compose up -d
+
+Passo 5 — Reindexar (os parquets grandes não estão versionados)
+  python src\p2_search\p2_indexar.py --parquet data\processed\chunks_completo_unificado.parquet --resetar
+  # ATENÇÃO: precisa do parquet unificado (111MB) — ver nota abaixo
+
+Passo 6 — Usar a busca no agente
+  from src.p2_search.p2_indexar import conectar_qdrant, carregar_indices, buscar
+
+  qclient = conectar_qdrant()
+  bm25, bm25_ids = carregar_indices(qclient)
+
+  resultados = buscar("qual a tarifa TUSD?", qclient, bm25, bm25_ids)
+  for r in resultados:
+      print(r["titulo"])
+      print(r["texto"][:200])
+      print()
+
+NOTA SOBRE OS PARQUETS:
+  Os parquets grandes (chunks_pdf_completo e chunks_completo_unificado)
+  não estão no git por causa do tamanho (111MB).
+  Opções:
+    A) Pedir ao P1 para compartilhar os parquets via Google Drive/OneDrive
+    B) Rodar o pipeline completo do zero (demora ~30min):
+       python setup_pipeline.py --apenas-parser
+       python src\p1_ingestion\unir_parquets.py
+    C) Usar só o parquet de ementas (já versionado, menor):
+       python src\p2_search\p2_indexar.py --parquet data\processed\chunks_json_todos.parquet --resetar
+       (menos rico, mas funciona para testar o agente)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. VERIFICAÇÃO RÁPIDA — tudo funcionando?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Rodar este checklist no terminal do projeto:
+
+  # 1. Python OK?
+  python --version
+
+  # 2. Dependências OK?
+  python -c "import fitz, pdfplumber, qdrant_client, sentence_transformers; print('OK')"
+
+  # 3. Docker/Qdrant OK?
+  python -c "from qdrant_client import QdrantClient; QdrantClient(url='http://localhost:6333').get_collections(); print('Qdrant OK')"
+
+  # 4. BM25 OK?
+  python -c "
+  import pickle
+  from pathlib import Path
+  bm25 = pickle.load(open('db/bm25/bm25_index.pkl','rb'))
+  ids  = pickle.load(open('db/bm25/bm25_ids.pkl','rb'))
+  print(f'BM25 OK — {len(ids):,} documentos')
+  "
+
+  # 5. Busca OK?
+  python -c "
+  from src.p2_search.p2_indexar import conectar_qdrant, carregar_indices, buscar
+  qclient = conectar_qdrant()
+  bm25, ids = carregar_indices(qclient)
+  r = buscar('tarifa TUSD distribuição', qclient, bm25, ids, n_resultados=1)
+  print('Busca OK:', r[0]['titulo'] if r else 'sem resultado')
+  "
+
+Se todos os 5 passos retornarem OK, o sistema está pronto para a P3.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. RESUMO DAS DEPENDÊNCIAS EXTERNAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+┌─────────────────┬──────────────┬─────────────────────────────────────────┐
+│ Ferramenta      │ Obrigatório  │ URL                                     │
+├─────────────────┼──────────────┼─────────────────────────────────────────┤
+│ Python 3.11/12  │ Sim          │ python.org/downloads                    │
+│ Docker Desktop  │ Sim (Qdrant) │ docker.com/products/docker-desktop      │
+│ Tesseract 5.x   │ Sim (OCR)    │ github.com/UB-Mannheim/tesseract/wiki   │
+│ Poppler         │ Sim (OCR)    │ github.com/oschwartz10612/poppler-windows│
+│ 7-Zip           │ Só para RAR  │ 7-zip.org                               │
+│ Anthropic Key   │ Sim (P3)     │ console.anthropic.com                   │
+└─────────────────┴──────────────┴─────────────────────────────────────────┘
+
+Apenas Poppler é instalado dentro da pasta do projeto.
+Todos os outros são instalados no sistema normalmente.
+
+================================================================================

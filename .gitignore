@@ -1,0 +1,70 @@
+# ── Dados grandes — gerar localmente rodando o pipeline ──────────────
+data/aneel_limpo_completo.json
+data/aneel_vigentes_completo.json
+
+# Parquets gerados pelo pipeline P1 (grandes — gerar localmente)
+data/processed/chunks_pdf_completo.parquet
+data/processed/chunks_completo_unificado.parquet
+# chunks_json_todos.parquet é pequeno (2.4MB) — pode versionar se quiser
+# data/processed/chunks_json_todos.parquet
+
+# ── Banco de dados local ───────────────────────────────────────────────
+db/             # Qdrant + BM25 — gerar rodando p2_indexar.py
+
+# ── PDFs e arquivos baixados ───────────────────────────────────────────
+pdfs/           # ~27k arquivos — baixar rodando baixar_pdfs_aneel.py
+
+# ── Dependências externas (instalar manualmente — ver SETUP.txt) ───────
+poppler/        # Poppler para Windows (OCR) — não instalar no sistema
+
+# ── Ambiente Python ────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ── Variáveis de ambiente (NUNCA versionar) ────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── IDEs ───────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ── Sistema operacional ────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V500
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ── Logs e temporários ─────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+falhas_download.json
+falhas_playwright.json
+pdfs/downloads_referenciados.json
+
+# ── Jupyter ────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Claude settings ────────────────────────────────────────────────────
+.claude/
