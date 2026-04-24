@@ -10,7 +10,7 @@ dos atos normativos, sem alucinação.
 Pré-requisitos:
   - Docker rodando com Qdrant: docker compose up -d
   - python src/p2_search/p2_indexar.py  (indexação feita ao menos uma vez)
-  - .env com GEMINI_API_KEY
+  - .env com GROQ_API_KEY
 
 Uso:
   uvicorn src.api.main:app --reload
