@@ -22,12 +22,12 @@ rank-bm25>=0.2.2
 
 # ── LLM — geração de respostas (P3) ───────────────────
 groq>=0.9.0                   # Groq (Llama 3.3 70B — console.groq.com)
-anthropic>=0.30.0             # Claude (claude-3-5-sonnet-20241022)
 # openai>=1.40.0              # GPT-4o (alternativa — requer créditos)
 
 # ── API (P3) ───────────────────────────────────────────
 fastapi>=0.111.0
 uvicorn>=0.30.0
+websockets<12
 
 # ── Utilitários ────────────────────────────────────────
 python-dotenv>=1.0.0          # carrega .env com as API keys
