@@ -1,0 +1,316 @@
+================================================================================
+PROMPT PARA GERAÇÃO DE SLIDES — RAG ANEEL (versão com BGE-M3)
+INSTRUÇÕES PARA IA (ex.: Gamma, Beautiful.ai, GPT-4, etc.)
+================================================================================
+
+Gere uma apresentação de slides profissional e técnica sobre o projeto descrito.
+Use linguagem direta, bullets curtos, destaque números e tecnologias em negrito.
+Design sugerido: fundo escuro (azul-marinho ou preto), texto branco, destaques
+em âmbar/laranja — referência ao setor de energia elétrica.
+
+================================================================================
+SLIDE 1 — CAPA
+================================================================================
+
+TÍTULO:
+  RAG ANEEL — Sistema de IA para Legislação do Setor Elétrico
+
+SUBTÍTULO:
+  Recuperação e geração sobre atos normativos da ANEEL em linguagem natural
+
+CONTEXTO:
+  Grupo de estudos NLP · 3 pessoas · Python · Sprint de 12 dias
+
+================================================================================
+SLIDE 2 — O PROBLEMA QUE RESOLVEMOS
+================================================================================
+
+TÍTULO: Legislação que ninguém consegue consultar rápido
+
+COLUNA ESQUERDA — Contexto:
+  • A ANEEL publica centenas de atos normativos por ano
+  • Resoluções, despachos e portarias em PDFs, HTMLs e planilhas
+  • Pesquisa manual é lenta, fragmentada e propensa a erro
+  • Nenhuma ferramenta de busca em linguagem natural disponível
+
+COLUNA DIREITA — Nossa solução:
+  Sistema RAG que responde qualquer pergunta sobre legislação elétrica
+  com citação direta da fonte — sem alucinações
+
+NÚMEROS DE IMPACTO (grandes, centralizados):
+  562.152 chunks indexados · 25.202 arquivos processados · 3 anos de legislação
+
+================================================================================
+SLIDE 3 — ARQUITETURA DO SISTEMA
+================================================================================
+
+TÍTULO: Pipeline de 3 Fases
+
+DIAGRAMA EM FLUXO (horizontal):
+
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │  [JSONs ANEEL]──→[P1: Ingestão]──→[562k chunks Parquet]──→[P2: Índice]│
+  │        ↓                                                       ↓       │
+  │  [PDFs/HTMLs/XLSXs]                              [Qdrant + BM25]      │
+  │                                                        ↓               │
+  │  [Pergunta]──→[P3: API]──→[Query Optimizer]──→[Busca Híbrida]         │
+  │                                                        ↓               │
+  │                        [Groq Llama 3.3 70B / DeepSeek R1]             │
+  │                                    ↓                                   │
+  │                         [Resposta + Citação da Fonte]                  │
+  └────────────────────────────────────────────────────────────────────────┘
+
+RODAPÉ:
+  Cada fase entrega um artefato concreto · Fases independentes e reutilizáveis
+
+================================================================================
+SLIDE 4 — P1: ENGENHARIA DE DADOS
+================================================================================
+
+TÍTULO: P1 — Data Engineer · Ingestão, Parse e Chunking
+
+TRÊS COLUNAS:
+
+  ① DOWNLOAD (curl_cffi)
+    • Contorna Cloudflare via impersonação TLS Chrome 124
+    • 25.202 arquivos baixados com sucesso
+    • Formatos: PDF · HTML · XLSX · ZIP · RAR
+    • Download paralelo com workers configuráveis
+    • Falhas registradas para reprocessamento
+
+  ② PARSING (PyMuPDF · pdfplumber · BeautifulSoup4 · openpyxl)
+    • PDFs digitais → PyMuPDF (texto limpo, detecção de tachado)
+    • PDFs com tabelas → pdfplumber (estrutura de células preservada)
+    • HTMLs → BeautifulSoup4
+    • Planilhas XLSX/XLSM → openpyxl linha por linha
+    • Cabeçalho injetado nos chunks de dados das planilhas
+
+  ③ CHUNKING (LangChain RecursiveCharacterTextSplitter)
+    • 800 chars por chunk · 120 de overlap
+    • Chunks < 50 chars descartados
+    • Metadados por chunk: número, ano, tipo, título, fonte, chunk_index
+
+DADO DE DESTAQUE:
+  578.319 chunks gerados (16.167 ementas + 562.152 PDFs/HTMLs/XLSXs)
+
+================================================================================
+SLIDE 5 — P2: BUSCA HÍBRIDA
+================================================================================
+
+TÍTULO: P2 — Search Engineer · Indexação e Recuperação
+
+DIAGRAMA CENTRAL:
+
+  BUSCA SEMÂNTICA                    BUSCA LEXICAL
+  ─────────────────                  ───────────────────
+  Modelo: MiniLM-L12-v2 (local)      Algoritmo: BM25Okapi
+  Dimensões: 384                     Corpus: 562.152 documentos
+  Vector Store: Qdrant               Tokenização em PT-BR
+  562.152 vetores                    Serializado em pickle
+  Distância cosseno
+           ↘                                  ↙
+               WEIGHTED HYBRID SCORE
+               0.6 × semântico + 0.4 × BM25
+
+FUNCIONALIDADES AVANÇADAS:
+  • HyDE — embedding sobre trecho hipotético (não sobre a query pura)
+  • Expansão de contexto — chunks vizinhos (±2 por chunk base)
+  • Filtros automáticos — número e ano do ato extraídos da query por regex
+  • Fallback sem filtros — busca "modo menção" quando score < 0.5
+  • Pool de 4 conexões Qdrant — scrolls paralelos para menor latência
+
+================================================================================
+SLIDE 6 — UPGRADE DE EMBEDDING: BGE-M3
+================================================================================
+
+TÍTULO: Nova Indexação com BAAI/bge-m3 · Google Colab GPU L4
+
+COMPARATIVO (duas colunas):
+
+  MODELO ATUAL                       MODELO NOVO
+  ─────────────────────────          ─────────────────────────
+  MiniLM-L12-v2                      BAAI/bge-m3
+  384 dimensões                      1.024 dimensões
+  ~120 MB                            ~2,3 GB de vetores (562k docs)
+  Gerado em CPU local                Gerado em GPU L4 (24GB VRAM)
+  Tempo de indexação: ~8h (CPU)      Tempo de indexação: ~25 min (L4)
+  Modelo multilíngue básico          Melhor modelo multilíngue atual
+  Score médio: baseline              Score semântico estimado: +15–25%
+
+COMO FUNCIONA NA PRÁTICA:
+  • Indexação realizada no Google Colab com GPU L4
+  • Arquivo de índice gerado e salvo como bge_index.bin na raiz do projeto
+  • Sistema detecta o arquivo automaticamente na inicialização
+  • Se o arquivo não estiver presente: usa MiniLM local (fallback automático)
+  • Sem intervenção manual — troca de modelo é transparente
+
+RESULTADO ESPERADO:
+  Menos fallbacks desnecessários · Scores semânticos mais altos
+  Melhor recuperação de documentos técnicos em PT-BR
+
+================================================================================
+SLIDE 7 — P3: API, LLM E INTERFACE
+================================================================================
+
+TÍTULO: P3 — LLM Engineer · API, Geração e Avaliação
+
+QUATRO COLUNAS:
+
+  ① API (FastAPI)
+    • POST /query — pergunta → resposta com citação
+    • GET /health — monitoramento
+    • GET /docs   — Swagger automático
+    • Cache LRU: 100 entradas, TTL 5min
+    • ThreadPoolExecutor (paralelismo)
+    • Timeout 12s no otimizador
+
+  ② Query Optimizer (Groq)
+    • Rewriting com vocabulário ANEEL
+    • HyDE (trecho hipotético)
+    • Decomposição em sub-queries
+    • Memória: últimos 6 turnos
+    • Filtros automáticos (número/ano)
+    • Detecção de mudança de contexto
+    • Roteamento analítico (pandas, sem LLM)
+
+  ③ LLMs com Fallback
+    Principal: Groq llama-3.3-70b
+    • 100k tokens/dia gratuito
+    Fallback automático: DeepSeek R1
+    • Ativo quando Groq retorna 429
+    • API OpenAI-compatível
+    6 prompts adaptativos:
+    BUSCA · RESUMO · COMPARACAO
+    TABELA · ESPECIFICA · MENCAO
+
+  ④ Interface (Streamlit)
+    • Histórico: 10 turnos
+    • Scores semântico + BM25
+    • Indicador de cache hit
+    • Tipo de resposta detectado
+    • Roteamento analítico direto
+
+FRASE DE DESTAQUE:
+  "Sistema responde com citação direta da fonte. Zero inferência externa."
+
+================================================================================
+SLIDE 8 — PROBLEMAS RESOLVIDOS NA PRÁTICA
+================================================================================
+
+TÍTULO: Desafios Técnicos Superados
+
+TRÊS CARDS:
+
+  CARD 1: Planilhas XLSX sem contexto
+  ────────────────────────────────────
+  Problema: chunks de XLSX sem cabeçalho de coluna — LLM recebia
+            "0.03 | 0.025 | 0.025" sem saber o que cada número representava
+  Solução:  injeção automática do cabeçalho + boost de score XLSX (tipo tabela)
+  Resultado: "Qual a taxa de depreciação para TURBINA HIDRÁULICA?"
+             → "2,5% ao ano" — correto, com citação e unidade ✓
+
+  CARD 2: Documentos não disponíveis na base
+  ──────────────────────────────────────────
+  Problema: ato não indexado → "Não encontrado" (perda de informação)
+  Solução:  fallback sem filtros → chunks que MENCIONAM o ato → prompt MENCAO
+  Resultado: REN 687 não disponível → cita menções na REN 956 e REN 1000 ✓
+
+  CARD 3: Latência de 16–32 segundos
+  ────────────────────────────────────
+  Problema: scrolls sequenciais no Qdrant, embedding sem cache
+  Soluções: cache de embeddings, pool de 4 conexões, ThreadPoolExecutor
+  Resultado: busca tipo tabela (cache quente): ~2,3s ✓
+
+================================================================================
+SLIDE 9 — ESCALA E LATÊNCIA
+================================================================================
+
+TÍTULO: Números do Sistema
+
+MÉTRICAS EM DESTAQUE:
+
+  562.152    vetores no Qdrant
+   25.202    arquivos baixados
+    1.024    dimensões do embedding (BGE-M3)
+        3    anos indexados (2016 · 2021 · 2022)
+    ~2,3s    latência mediana (busca tabela, cache quente)
+    ~7–9s    latência (busca resumo, com vizinhos)
+    ~25min   indexação de 562k chunks com BGE-M3 no Colab (GPU L4)
+
+DISTRIBUIÇÃO DOS CHUNKS:
+  pdf_completo   376.929   67%
+  xlsx           178.525   32%
+  html             6.689    1%
+
+CUSTO TOTAL:
+  Groq (LLM principal):       $0,00   (plano gratuito)
+  DeepSeek R1 (fallback):    ~$0,05   (por 100 perguntas)
+  BGE-M3 no Colab:            $0,00   (T4/L4 gratuito no Colab)
+  Embeddings MiniLM (local):  $0,00
+  Qdrant (local):             $0,00
+
+================================================================================
+SLIDE 10 — BENCHMARK DE AVALIAÇÃO
+================================================================================
+
+TÍTULO: Avaliação com RAGAS · 45 Perguntas · 10 Categorias
+
+TRÊS MÉTRICAS:
+
+  FAITHFULNESS         A resposta é fiel aos chunks recuperados?
+  RESPONSE RELEVANCY   A resposta resolve a dúvida?
+  CONTEXT PRECISION    Os chunks recuperados eram relevantes?
+
+CATEGORIAS DO BENCHMARK:
+  ① Semântica simples         ② Documentos específicos
+  ③ Relações entre atos       ④ Dados de planilhas (XLSX)
+  ⑤ Analytics / contagem      ⑥ Memória de conversa
+  ⑦ Modo menção               ⑧ Anti-alucinação
+  ⑨ Filtros por metadados     ⑩ Comparação temporal
+
+AVALIADOR:
+  Groq llama-3.3-70b — mesmo provider, custo adicional zero
+
+================================================================================
+SLIDE 11 — STACK COMPLETA
+================================================================================
+
+TÍTULO: Tecnologias Utilizadas
+
+TABELA:
+
+  Componente          Tecnologia                    Observação
+  ──────────────────────────────────────────────────────────────
+  Linguagem           Python 3.11/3.12              —
+  Vector Store        Qdrant (Docker)               562k vetores, cosseno
+  Embeddings          BGE-M3 / MiniLM (fallback)    1024 dims / 384 dims
+  Infraestrutura      Google Colab GPU L4           indexação BGE-M3 (~25min)
+  Busca esparsa       BM25Okapi / rank-bm25          562k documentos
+  LLM principal       Groq llama-3.3-70b             100k tokens/dia grátis
+  LLM fallback        DeepSeek R1 (deepseek-reasoner) API OpenAI-compatível
+  API                 FastAPI + Uvicorn              async, cache LRU
+  Interface           Streamlit                     histórico, métricas
+  Dados               Parquet (pyarrow)             111MB unificado
+  Download            curl_cffi                     TLS fingerprint Chrome
+
+DESTAQUE:
+  100% local ou gratuito — sem dependência de APIs pagas para rodar
+
+================================================================================
+SLIDE 12 — ENCERRAMENTO
+================================================================================
+
+TÍTULO: RAG ANEEL — Resultado
+
+FRASE CENTRAL:
+  Legislação do setor elétrico acessível em linguagem natural,
+  com citação direta da fonte e custo operacional zero.
+
+QUATRO PILARES:
+  ESCALA             CONFIANÇA              QUALIDADE          CUSTO
+  562k chunks        Zero alucinações       BGE-M3             $0 para
+  25k arquivos       com fontes citadas     1024 dims          rodar
+
+================================================================================
+FIM DOS SLIDES (versão com BGE-M3)
+================================================================================

@@ -11,8 +11,6 @@ langchain-text-splitters>=0.2.0
 
 # ── Download de PDFs (P1) ─────────────────────────────
 curl_cffi>=0.6.0              # contorna Cloudflare (impersonate Chrome)
-aiohttp>=3.9.0                # requisições HTTP assíncronas
-aiofiles>=23.0.0              # escrita de arquivos assíncrona
 
 # ── Parser de PDFs (P1) ───────────────────────────────
 pymupdf>=1.24.0               # extração de texto, tachado, imagens (fitz)
@@ -34,21 +32,20 @@ qdrant-client>=1.9.0          # cliente Qdrant (requer Docker rodando)
 rank-bm25>=0.2.2
 
 # ── LLM — geração de respostas (P3) ───────────────────
-anthropic>=0.30.0             # Claude (claude-sonnet-4-6)
-# openai>=1.40.0              # GPT-4o (alternativa — requer créditos)
+groq>=0.9.0                   # Groq — Llama 3.3 70B (gratuito, console.groq.com)
+openai>=1.40.0                # DeepSeek R1 via API OpenAI-compatível (fallback do Groq)
 
 # ── API (P3) ───────────────────────────────────────────
 fastapi>=0.111.0
 uvicorn>=0.30.0
 
+# ── Interface gráfica (P3) ────────────────────────────
+streamlit>=1.35.0
+requests>=2.31.0              # chamadas HTTP do app.py para a API
+
 # ── Utilitários ────────────────────────────────────────
 python-dotenv>=1.0.0          # carrega .env com as API keys
 tqdm>=4.66.0                  # barras de progresso
-
-# ── Playwright (P1 — tentativa de bypass, substituído por curl_cffi) ──
-# playwright>=1.44.0
-# playwright-stealth>=2.0.0
-# pip install playwright && playwright install chromium
 
 # ── Notas de instalação ────────────────────────────────
 # RAR: requer 7-Zip instalado em C:\Program Files\7-Zip\7z.exe
@@ -59,3 +56,14 @@ tqdm>=4.66.0                  # barras de progresso
 #
 # sentence-transformers: baixa modelo na primeira execução (~120MB)
 #   fica em cache automaticamente
+#
+# Groq: chave gratuita em console.groq.com (sem cartão de crédito)
+#   Adicionar no .env: GROQ_API_KEY=sua_chave
+#
+# DeepSeek R1: chave em platform.deepseek.com (pago, ~$0.55/M tokens input)
+#   Fallback automático quando Groq retornar 429 (rate limit)
+#   Adicionar no .env: DEEPSEEK_API_KEY=sua_chave
+#
+# REMOVIDAS (não importadas em nenhum arquivo de código):
+#   aiohttp, aiofiles  → eram do download async, substituído por curl_cffi
+#   websockets         → não é importado diretamente; uvicorn não exige pinagem

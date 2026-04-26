@@ -14,7 +14,7 @@ db/             # Qdrant + BM25 — gerar rodando p2_indexar.py
 # ── PDFs e arquivos baixados ───────────────────────────────────────────
 pdfs/           # ~27k arquivos — baixar rodando baixar_pdfs_aneel.py
 
-# ── Dependências externas (instalar manualmente — ver SETUP.txt) ───────
+# ── Dependências externas (instalar manualmente — ver SETUP.md) ───────
 poppler/        # Poppler para Windows (OCR) — não instalar no sistema
 
 # ── Ambiente Python ────────────────────────────────────────────────────

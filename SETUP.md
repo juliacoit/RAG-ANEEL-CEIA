@@ -178,14 +178,19 @@ RAG-ANEEL-CEIA/
 │   └── 2022/
 ├── poppler/                 ← Poppler local (não versionar)
 │   └── Library/bin/
+├── scripts/
+│   └── setup_pipeline.py    ← orquestrador do pipeline
 ├── src/
+│   ├── __init__.py
 │   ├── p1_ingestion/
+│   │   ├── __init__.py
 │   │   ├── limpar_json_aneel.py
 │   │   ├── baixar_pdfs_aneel.py
 │   │   ├── chunker_json.py
 │   │   ├── parser.py
 │   │   └── unir_parquets.py
 │   ├── p2_search/
+│   │   ├── __init__.py
 │   │   └── p2_indexar.py
 │   └── p3_agent/            ← pasta para a P3 criar
 │       └── agente.py        ← a P3 implementa aqui
@@ -194,8 +199,7 @@ RAG-ANEEL-CEIA/
 ├── docker-compose.yml
 ├── env.example
 ├── requirements.txt
-├── setup_pipeline.py
-└── SETUP.txt                ← este arquivo
+└── SETUP.md                 ← este arquivo
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -240,7 +244,7 @@ NOTA SOBRE OS PARQUETS:
   Opções:
     A) Pedir ao P1 para compartilhar os parquets via Google Drive/OneDrive
     B) Rodar o pipeline completo do zero (demora ~30min):
-       python setup_pipeline.py --apenas-parser
+       python scripts\setup_pipeline.py --apenas-parser
        python src\p1_ingestion\unir_parquets.py
     C) Usar só o parquet de ementas (já versionado, menor):
        python src\p2_search\p2_indexar.py --parquet data\processed\chunks_json_todos.parquet --resetar
