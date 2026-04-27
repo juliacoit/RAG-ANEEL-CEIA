@@ -72,7 +72,7 @@ QDRANT_URL      = "http://localhost:6333"
 MODELO_EMBED    = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DIM_EMBED       = 384   # dimensão deste modelo
 
-LOTE_EMBED      = 1024  # chunks por lote — ~3GB RAM durante embedding
+LOTE_EMBED      = 64    # chunks por lote de embedding (menor que OpenAI pois é local)
 LOTE_QDRANT     = 200   # pontos por upsert no Qdrant
 
 PESO_SEMANTICO  = 0.6
@@ -115,7 +115,6 @@ def gerar_embeddings(textos: list[str]) -> list[list[float]]:
             lote,
             normalize_embeddings=True,   # normaliza para distância cosseno
             show_progress_bar=False,
-            batch_size=512,              # ~3GB RAM — processa 512 textos por vez
         )
         todos.extend(vetores.tolist())
 
@@ -205,8 +204,7 @@ def indexar_qdrant(
                 "texto":           _s(row.get("texto")),
             }
 
-            # Usa índice absoluto do DataFrame como ID — sempre único, sem colisão
-            ponto_id = i * LOTE_QDRANT + j
+            ponto_id = abs(hash(payload["chunk_id"])) % (2 ** 53)
             pontos.append(PointStruct(
                 id=ponto_id,
                 vector=lote_emb[j],
@@ -381,8 +379,8 @@ def buscar(
             "texto":           payload.get("texto", ""),
         })
 
-
     return resultados
+
 
 def carregar_indices(qclient: QdrantClient) -> tuple:
     """
@@ -405,6 +403,10 @@ def carregar_indices(qclient: QdrantClient) -> tuple:
         bm25_ids = pickle.load(f)
     return bm25, bm25_ids
 
+
+# ---------------------------------------------------------------------------
+# Teste de busca
+# ---------------------------------------------------------------------------
 
 def testar(qclient: QdrantClient, bm25: BM25Okapi, bm25_ids: list) -> None:
     """Roda perguntas de teste para validar o sistema."""
@@ -434,6 +436,10 @@ def testar(qclient: QdrantClient, bm25: BM25Okapi, bm25_ids: list) -> None:
     log.info("=" * 60)
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main():
     parser = argparse.ArgumentParser(
         description="Indexa chunks da ANEEL no Qdrant + BM25 (embeddings locais)"
@@ -458,6 +464,7 @@ def main():
 
     qclient = conectar_qdrant()
 
+    # Lê parquet
     parquet_path = Path(args.parquet)
     if not parquet_path.exists():
         log.error(f"Parquet não encontrado: {parquet_path}")
@@ -466,7 +473,7 @@ def main():
 
     log.info(f"Lendo {parquet_path.name}...")
     df = pd.read_parquet(parquet_path)
-    log.info(f"  {len(df):,} chunks carregados")
+    log.info(f"  {len(df)} chunks carregados")
 
     if args.limite:
         df = df.head(args.limite)
@@ -475,29 +482,30 @@ def main():
     if "chunk_id" not in df.columns:
         df["chunk_id"] = df.index.astype(str)
 
+    # Cria coleção
     criar_colecao(qclient, resetar=args.resetar)
 
+    # Verifica se já está indexado
     count = qclient.count(NOME_COLECAO).count
     if count >= len(df) and not args.resetar:
-        log.info(f"Qdrant já tem {count:,} pontos. Pulando embeddings.")
+        log.info(f"Qdrant já tem {count} pontos. Pulando embeddings.")
     else:
-        log.info(f"Gerando embeddings para {len(df):,} chunks...")
+        # Gera embeddings localmente
+        log.info(f"Gerando embeddings para {len(df)} chunks (local, sem custo)...")
         textos     = df["texto"].tolist()
         embeddings = gerar_embeddings(textos)
+
+        # Indexa no Qdrant
         indexar_qdrant(df, embeddings, qclient)
 
-    # Recria BM25 sempre que --resetar
-    if args.resetar and ARQUIVO_BM25.exists():
-        ARQUIVO_BM25.unlink()
-        ARQUIVO_IDS.unlink()
-
+    # Cria BM25
     bm25, bm25_ids = criar_bm25(df)
 
     log.info("\n" + "=" * 55)
     log.info("INDEXAÇÃO CONCLUÍDA")
     log.info("=" * 55)
-    log.info(f"  Qdrant  : {qclient.count(NOME_COLECAO).count:,} pontos")
-    log.info(f"  BM25    : {len(bm25_ids):,} documentos")
+    log.info(f"  Qdrant  : {qclient.count(NOME_COLECAO).count} pontos")
+    log.info(f"  BM25    : {len(bm25_ids)} documentos")
     log.info(f"  Modelo  : {MODELO_EMBED}")
     log.info(f"  Coleção : {NOME_COLECAO}")
     log.info("=" * 55)
