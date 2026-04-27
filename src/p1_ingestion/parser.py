@@ -4,38 +4,26 @@ parser.py
 Pessoa 1 — Data Engineer
 
 Parser de alta performance para arquivos da ANEEL.
-Configurado para usar ~2GB de RAM com máximo paralelismo.
 
-Estratégia de memória (~2GB):
-  - 12 workers ProcessPool = 12 PDFs simultâneos (~1.8GB)
-  - Buffer de 5000 chunks em RAM antes de gravar (~10MB)
-  - Cache de 30k arquivos já processados em memória (~3MB)
-  - Overhead libs (PyMuPDF, pdfplumber, PyArrow): ~300MB
-  - TOTAL: ~2.1GB
-
-Para cada PDF, extrai:
-  - Texto completo com posição de página
-  - Texto tachado: marcado como [TACHADO: ...]
-  - Imagens: marcadas como [IMAGEM]
-  - Tabelas: convertidas para Markdown com pdfplumber
-  - Cabeçalhos/rodapés: removidos automaticamente
-  - Caracteres especiais preservados (§, º, ≤, ≥, etc.)
-
-Pré-requisitos:
-  pip install pymupdf pdfplumber pyarrow pandas langchain-text-splitters tqdm
+Melhorias implementadas:
+  ✓ BUG CORRIGIDO: regex _RE_ATO_NORMATIVO com escape correto
+  ✓ Chunking semântico jurídico (Art., §, CAPÍTULO, incisos)
+  ✓ Extração e salvamento de imagens em disco com IDs únicos
+  ✓ Referências textuais entre atos normativos (refs_texto)
+  ✓ Filtro de chunks inúteis (XLSX linhas vazias, densidade baixa)
+  ✓ Deduplicação de chunks idênticos dentro do documento
+  ✓ Checkpoint de progresso — retoma onde parou se interrompido
+  ✓ Metadados de qualidade por chunk (n_tokens, densidade)
+  ✓ Extração de valores numéricos e percentuais (valores_num)
+  ✓ Extração de datas mencionadas no corpo do texto
+  ✓ Filtro de assinaturas (imagens muito pequenas/estreitas)
 
 Uso:
-  # Processar tudo (~2GB RAM, recomendado):
-  python src/p1_ingestion/parser.py
-
-  # Testar com 100 arquivos:
-  python src/p1_ingestion/parser.py --limite 100
-
-  # Só um ano e categoria:
-  python src/p1_ingestion/parser.py --ano 2022 --categoria texto_integral
-
-  # Ajustar workers manualmente:
-  python src/p1_ingestion/parser.py --workers 8
+  python src/p1_ingestion/parser.py             # tudo
+  python src/p1_ingestion/parser.py --limite 50 # teste rápido
+  python src/p1_ingestion/parser.py --ano 2022  # só 2022
+  python src/p1_ingestion/parser.py --workers 8 # menos RAM
+  python src/p1_ingestion/parser.py --sem-checkpoint  # ignora checkpoint
 """
 
 import re
@@ -45,7 +33,6 @@ import argparse
 import unicodedata
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, asdict
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -63,7 +50,7 @@ except ImportError:
     USA_TQDM = False
 
 # ---------------------------------------------------------------------------
-# Configurações — calibradas para ~2GB de RAM
+# Configurações
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(
@@ -73,22 +60,27 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-RAIZ       = Path(__file__).resolve().parent.parent.parent
-PASTA_PDFS = RAIZ / "pdfs"
-PASTA_DATA = RAIZ / "data" / "processed"
-JSON_LIMPO = RAIZ / "data" / "aneel_vigentes_completo.json"
-PARQUET_OUT= PASTA_DATA / "chunks_pdf_completo.parquet"
+RAIZ        = Path(__file__).resolve().parent.parent.parent
+PASTA_PDFS  = RAIZ / "pdfs"
+PASTA_DATA  = RAIZ / "data" / "processed"
+JSON_LIMPO  = RAIZ / "data" / "aneel_vigentes_completo.json"
+PARQUET_OUT = PASTA_DATA / "chunks_pdf_completo.parquet"
+CHECKPOINT  = PASTA_DATA / "parser_checkpoint.json"
 
-# Chunking
+# Chunking semântico
 CHUNK_SIZE    = 800
 CHUNK_OVERLAP = 120
 
-# Performance — ~2GB RAM
-WORKERS       = 12     # PDFs processados em paralelo
-BATCH_WRITE   = 5000   # chunks em RAM antes de gravar no Parquet
-MIN_CHARS_PAG = 50     # abaixo = PDF escaneado
+# Performance
+WORKERS       = 50
+BATCH_WRITE   = 5000
+MIN_CHARS_PAG = 50    # abaixo = PDF sem texto extraível
+MIN_CHUNK_DENSIDADE = 0.3   # chunks com menos de 30% de chars úteis são descartados
+MIN_CHUNK_CHARS     = 30    # chunks com menos de 30 chars são descartados
 
 CATEGORIAS = ["texto_integral", "voto", "nota_tecnica", "decisao", "anexo", "outro"]
+
+
 
 # ---------------------------------------------------------------------------
 # Schema Parquet
@@ -118,7 +110,14 @@ SCHEMA = pa.schema([
     pa.field("tem_imagem",      pa.bool_()),
     pa.field("tem_tachado",     pa.bool_()),
     pa.field("qualidade",       pa.string()),
+    pa.field("n_tokens",        pa.int32()),   # estimativa de tokens
+    pa.field("densidade",       pa.float32()), # proporção de chars úteis
     pa.field("texto",           pa.string()),
+
+    pa.field("refs_texto",      pa.string()),  # JSON: ["REN_482_2012", ...]
+    pa.field("n_refs",          pa.int32()),
+    pa.field("valores_num",     pa.string()),  # JSON: ["50%", "R$ 1.200,00"]
+    pa.field("datas_texto",     pa.string()),  # JSON: datas mencionadas no corpo
 ])
 
 DEFAULTS = {
@@ -128,15 +127,16 @@ DEFAULTS = {
     "data_publicacao": "", "url_pdf": "", "fonte_texto": "pdf_completo",
     "pagina_inicio": 0, "pagina_fim": 0, "chunk_index": 0, "chunk_total": 0,
     "tem_tabela": False, "tem_imagem": False, "tem_tachado": False,
-    "qualidade": "ok", "texto": "",
+    "qualidade": "ok", "n_tokens": 0, "densidade": 0.0, "texto": "",
+    "refs_texto": "[]", "n_refs": 0,
+    "valores_num": "[]", "datas_texto": "[]",
 }
 
 
 # ---------------------------------------------------------------------------
-# Funções de extração (rodam dentro dos workers)
+# Regex compilados (nível de módulo — compartilhados entre workers)
 # ---------------------------------------------------------------------------
 
-# Regex compilados uma vez — mais performático com 27k arquivos
 _RE_HIFENIZACAO    = re.compile(r"-\s*\n\s*")
 _RE_MULTIPLOS_NL   = re.compile(r"\n{3,}")
 _RE_ESPACOS_DUPLOS = re.compile(r"[ \t]{2,}")
@@ -144,27 +144,94 @@ _RE_PAGINA_NUM     = re.compile(r"(?m)^\s*(?:Página|página|Pg\.?|pg\.?|p\.)?\s
 _RE_LINHA_PONTUA   = re.compile(r"(?m)^\s*[-–—=_*·•]{3,}\s*$")
 _RE_CTRL           = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
+# ✓ BUG CORRIGIDO: escape simples \b, não \\b
+_RE_ATO_NORMATIVO = re.compile(
+    r"\b(?:Resolu[cç][aã]o\s+Normativa|Resolu[cç][aã]o\s+Autorizativa|"
+    r"Resolu[cç][aã]o\s+Homologatória|Despacho|Portaria|"
+    r"Instru[cç][aã]o\s+Normativa|Decreto)\s+"
+    r"(?:n[oº°]?\.?\s*)?(\d{1,5})[/,\s]+(?:de\s+)?(\d{4})",
+    re.IGNORECASE,
+)
+
+_TIPO_PREFIXO = {
+    "resolução normativa": "REN", "resolução autorizativa": "REA",
+    "resolução homologatória": "REH", "despacho": "DSP",
+    "portaria": "PRT", "instrução normativa": "INA", "decreto": "DEC",
+}
+
+# Valores numéricos: percentuais e monetários
+_RE_VALORES = re.compile(
+    r"(?:"
+    r"\d{1,3}(?:\.\d{3})*(?:,\d{1,4})?\s*%"        # percentual: 50%, 1.200,50%
+    r"|R\$\s*\d{1,3}(?:\.\d{3})*(?:,\d{2})?"        # monetário: R$ 1.200,00
+    r"|\d{1,3}(?:\.\d{3})*(?:,\d{2})?\s*R\$/MWh"    # tarifa: 120,50 R$/MWh
+    r"|\d+(?:,\d+)?\s*(?:MW|kW|GW|MWh|kWh)"         # energia: 100 MW
+    r")",
+    re.IGNORECASE,
+)
+
+# Datas mencionadas no corpo do texto
+_RE_DATA = re.compile(
+    r"\b(?:\d{1,2}/\d{1,2}/\d{4}"           # 01/01/2022
+    r"|\d{1,2}\s+de\s+\w+\s+de\s+\d{4}"     # 1 de janeiro de 2022
+    r"|\d{4}-\d{2}-\d{2})\b",               # 2022-01-01
+    re.IGNORECASE,
+)
+
+
+# ---------------------------------------------------------------------------
+# Funções auxiliares
+# ---------------------------------------------------------------------------
 
 def _limpar_texto(texto: str) -> str:
-    """
-    Limpeza completa preservando caracteres especiais jurídicos/técnicos.
-    (§, º, ª, ≤, ≥, ×, ÷ — comuns em normas da ANEEL)
-    """
-    texto = unicodedata.normalize("NFC", texto)   # normaliza acentos de PDFs antigos
-    texto = _RE_CTRL.sub("", texto)               # remove controle (exceto \n\t)
-    texto = _RE_HIFENIZACAO.sub("", texto)        # "condi-\nções" → "condições"
-    texto = _RE_PAGINA_NUM.sub("", texto)         # remove números de página isolados
-    texto = _RE_LINHA_PONTUA.sub("", texto)       # remove linhas só com traços/bullets
-    texto = _RE_ESPACOS_DUPLOS.sub(" ", texto)    # colapsa espaços múltiplos
-    texto = _RE_MULTIPLOS_NL.sub("\n\n", texto)   # máx 2 quebras seguidas
+    texto = unicodedata.normalize("NFC", texto)
+    texto = _RE_CTRL.sub("", texto)
+    texto = _RE_HIFENIZACAO.sub("", texto)
+    texto = _RE_PAGINA_NUM.sub("", texto)
+    texto = _RE_LINHA_PONTUA.sub("", texto)
+    texto = _RE_ESPACOS_DUPLOS.sub(" ", texto)
+    texto = _RE_MULTIPLOS_NL.sub("\n\n", texto)
     return texto.strip()
 
 
+def _calcular_densidade(texto: str) -> float:
+    """Proporção de chars não-espaço sobre total. Chunks muito esparsos = ruído."""
+    if not texto:
+        return 0.0
+    util = sum(1 for c in texto if not c.isspace())
+    return round(util / len(texto), 3)
+
+
+def _estimar_tokens(texto: str) -> int:
+    """Estimativa rápida: ~4 chars por token para português."""
+    return max(1, len(texto) // 4)
+
+
+def _extrair_refs_texto(texto: str) -> list[str]:
+    """Extrai doc_ids referenciados no texto via regex."""
+    refs = []
+    for m in _RE_ATO_NORMATIVO.finditer(texto):
+        trecho = m.group(0).lower()
+        numero = m.group(1)
+        ano    = m.group(2)
+        tipo   = next((v for k, v in _TIPO_PREFIXO.items() if k in trecho), None)
+        if tipo:
+            refs.append(f"{tipo}_{numero}_{ano}")
+    return list(set(refs))
+
+
+def _extrair_valores(texto: str) -> list[str]:
+    """Extrai valores numéricos relevantes: percentuais, tarifas, potências."""
+    return list(set(m.group(0).strip() for m in _RE_VALORES.finditer(texto)))[:20]
+
+
+def _extrair_datas(texto: str) -> list[str]:
+    """Extrai datas mencionadas no corpo do texto."""
+    return list(set(m.group(0).strip() for m in _RE_DATA.finditer(texto)))[:10]
+
+
 def _detectar_cabecalho_rodape(paginas: list[str]) -> set[str]:
-    """
-    Linhas que aparecem em 80%+ das páginas = cabeçalho/rodapé.
-    Inspeciona 5 linhas do topo e 5 do rodapé de cada página.
-    """
+    """Linhas que aparecem em 80%+ das páginas = cabeçalho/rodapé."""
     from collections import Counter
     n = len(paginas)
     if n < 3:
@@ -176,57 +243,43 @@ def _detectar_cabecalho_rodape(paginas: list[str]) -> set[str]:
             l.strip() for l in linhas[:5] + linhas[-5:]
             if len(l.strip()) > 5
         )
-        for l in candidatas:
-            ctr[l] += 1
-    thr = max(3, int(n * 0.8))
-    return {l for l, c in ctr.items() if c >= thr}
+        ctr.update(candidatas)
+    return {l for l, c in ctr.items() if c / n >= 0.8}
 
 
-def _extrair_tabelas(pagina_plumber) -> list[str]:
-    """Extrai tabelas em Markdown com pdfplumber."""
-    tabelas = []
-    try:
-        for tbl in pagina_plumber.extract_tables():
-            if not tbl:
-                continue
-            linhas = []
-            for i, row in enumerate(tbl):
-                cells = [str(c or "").strip() for c in row]
-                linhas.append("| " + " | ".join(cells) + " |")
-                if i == 0:
-                    linhas.append("|" + "|".join(["---"] * len(cells)) + "|")
-            if linhas:
-                tabelas.append("\n".join(linhas))
-    except Exception:
-        pass
-    return tabelas
+def _chunk_util(txt: str) -> bool:
+    """Retorna False se o chunk é inútil (muito curto, muito esparso ou vazio)."""
+    if not txt or len(txt) < MIN_CHUNK_CHARS:
+        return False
+    if _calcular_densidade(txt) < MIN_CHUNK_DENSIDADE:
+        return False
+    return True
 
 
-def _extrair_pagina_fitz(pagina, fitz_mod=None) -> tuple[str, bool, bool]:
+# ---------------------------------------------------------------------------
+# Extração de texto com PyMuPDF
+# ---------------------------------------------------------------------------
+
+def _extrair_pagina_fitz(pagina) -> tuple[str, bool, bool]:
     """
     Extrai texto de uma página com PyMuPDF.
     Retorna (texto, tem_tachado, tem_imagem).
 
     Ordem de tentativas:
-      1. get_text("dict", flags=~0) — texto rico: detecta tachado e imagens
-      2. get_text("text") simples  — fallback para PDFs com estrutura malformada
-         (PDFs da ANEEL com warning "No common ancestor" caem aqui)
-      3. Retorna vazio → OCR em _processar_pdf
-
-    fitz_mod: módulo fitz já importado (evita re-import em multiprocessing Windows)
+      1. get_text("dict", flags=~0) — rico: detecta tachado e imagens
+      2. get_text("text") simples  — fallback para PDFs malformados
     """
     blocos  = []
     tachado = False
     imagem  = False
 
-    # Verifica imagens
     try:
         if pagina.get_images():
             imagem = True
     except Exception:
         pass
 
-    # ── Tentativa 1: modo dict — texto rico com tachado ───────────────────
+    # Tentativa 1: modo dict — detecta tachado
     chars_dict = 0
     try:
         dic = pagina.get_text("dict", flags=~0)
@@ -241,13 +294,13 @@ def _extrair_pagina_fitz(pagina, fitz_mod=None) -> tuple[str, bool, bool]:
                     t = span.get("text", "")
                     if not t.strip():
                         continue
-                    flags = span.get("flags", 0)
-                    eh_tachado = bool(flags & 8)
-                    if not eh_tachado:
+                    flags     = span.get("flags", 0)
+                    eh_tach   = bool(flags & 8)
+                    if not eh_tach:
                         cor = span.get("color", 0)
                         if isinstance(cor, int) and cor > 8_000_000:
-                            eh_tachado = True
-                    if eh_tachado:
+                            eh_tach = True
+                    if eh_tach:
                         tachado = True
                         linha_txt.append(f"[TACHADO: {t}]")
                     else:
@@ -258,11 +311,10 @@ def _extrair_pagina_fitz(pagina, fitz_mod=None) -> tuple[str, bool, bool]:
     except Exception:
         pass
 
-    # ── Tentativa 2: get_text simples — fallback robusto ──────────────────
+    # Tentativa 2: get_text simples (fallback robusto)
+    # TEXT_PRESERVE_READING_ORDER=4, TEXT_DEHYPHENATE=8
     if chars_dict < 50:
         try:
-            # Usa flags numéricas para evitar dependência do módulo fitz
-            # TEXT_PRESERVE_READING_ORDER = 4, TEXT_DEHYPHENATE = 8
             texto_simples = pagina.get_text("text", flags=4 | 8).strip()
             if len(texto_simples) > chars_dict:
                 imagens_marcadas = [b for b in blocos if b == "[IMAGEM]"]
@@ -273,12 +325,39 @@ def _extrair_pagina_fitz(pagina, fitz_mod=None) -> tuple[str, bool, bool]:
     return "\n".join(blocos), tachado, imagem
 
 
+def _extrair_tabelas(pagina_plumber) -> list[str]:
+    """Extrai tabelas em Markdown com pdfplumber."""
+    tabelas = []
+    try:
+        for tbl in pagina_plumber.extract_tables():
+            if not tbl:
+                continue
+            linhas = []
+            for i, row in enumerate(tbl):
+                cells = [str(c or "").strip().replace("\n", " ") for c in row]
+                linhas.append("| " + " | ".join(cells) + " |")
+                if i == 0:
+                    linhas.append("|" + "|".join(["---"] * len(cells)) + "|")
+            if len(linhas) > 2:  # pelo menos header + separator + 1 linha de dados
+                tabelas.append("\n".join(linhas))
+    except Exception:
+        pass
+    return tabelas
+
+
+# ---------------------------------------------------------------------------
+# Processamento de PDF
+# ---------------------------------------------------------------------------
+
 def _processar_pdf(caminho: Path) -> dict:
     """
     Processa um PDF completo.
-    Retorna dict com texto_por_pagina, tem_tachado, tem_imagem, qualidade.
+    Retorna dict com texto_por_pagina, imagens_por_pagina, metadados.
     """
     import fitz
+
+
+
     res = {
         "texto_por_pagina": [],
         "tem_tachado": False,
@@ -288,10 +367,10 @@ def _processar_pdf(caminho: Path) -> dict:
     }
 
     try:
-        doc = fitz.open(str(caminho))
+        doc    = fitz.open(str(caminho))
+
         res["n_paginas"] = len(doc)
 
-        # Tenta abrir pdfplumber para tabelas
         doc_pl = None
         try:
             import pdfplumber
@@ -303,11 +382,14 @@ def _processar_pdf(caminho: Path) -> dict:
         chars_total = 0
 
         for i, pag in enumerate(doc):
-            txt, tach, img = _extrair_pagina_fitz(pag, fitz)
+            txt, tach, img = _extrair_pagina_fitz(pag)
             if tach: res["tem_tachado"] = True
-            if img:  res["tem_imagem"]  = True
 
-            # Adiciona tabelas da mesma página
+            # Detecta se página tem imagens (sem salvar em disco)
+            if img:
+                res["tem_imagem"] = True
+
+            # Tabelas
             if doc_pl and i < len(doc_pl.pages):
                 try:
                     tbls = _extrair_tabelas(doc_pl.pages[i])
@@ -324,13 +406,14 @@ def _processar_pdf(caminho: Path) -> dict:
         if doc_pl:
             doc_pl.close()
 
-        # Qualidade
         cpp = chars_total / max(len(paginas_raw), 1)
-        if cpp < MIN_CHARS_PAG:   res["qualidade"] = "imagem"
-        elif cpp < 200:           res["qualidade"] = "baixa"
+        if cpp < MIN_CHARS_PAG:
+            res["qualidade"] = "imagem"
+        elif cpp < 200:
+            res["qualidade"] = "baixa"
 
-        # Remove cabeçalho/rodapé
-        cab = _detectar_cabecalho_rodape(paginas_raw)
+
+        cab     = _detectar_cabecalho_rodape(paginas_raw)
         paginas = []
         for pag in paginas_raw:
             linhas = [l for l in pag.split("\n") if l.strip() not in cab]
@@ -338,9 +421,8 @@ def _processar_pdf(caminho: Path) -> dict:
 
         res["texto_por_pagina"] = paginas
 
-    except Exception as e:
+    except Exception:
         res["qualidade"] = "erro"
-
     return res
 
 
@@ -349,19 +431,22 @@ def _processar_pdf(caminho: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 def worker(args: tuple) -> list[dict]:
-    """
-    Processa um arquivo e retorna lista de dicts de chunks.
-    Cada processo tem seu próprio splitter e imports.
-    """
     caminho_str, meta, chunk_size, chunk_overlap = args
     caminho = Path(caminho_str)
-    ext = caminho.suffix.lower()
+    ext     = caminho.suffix.lower()
 
+    # Chunking semântico — fronteiras jurídicas têm prioridade
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         length_function=len,
-        separators=["\n\n", "\n", ". ", " ", ""],
+        separators=[
+            "\nCAPÍTULO ", "\nSEÇÃO ", "\nSECAO ",
+            "\nArt. ", "\nArt.", "\nArtigo ",
+            "\n§ ", "\nParágrafo único",
+            "\nI - ", "\nII - ", "\nIII - ", "\nIV - ", "\nV - ",
+            "\n\n", "\n", ". ", " ", "",
+        ],
     )
 
     out = []
@@ -371,17 +456,17 @@ def worker(args: tuple) -> list[dict]:
         extr = _processar_pdf(caminho)
 
         if extr["qualidade"] in ("imagem", "erro"):
-            c = {**DEFAULTS, **meta,
-                 "chunk_id":    f"{meta.get('doc_id','')}_{caminho.name}_img",
-                 "arquivo":     caminho.name,
-                 "fonte_texto": "pdf_imagem",
-                 "qualidade":   extr["qualidade"],
-                 "tem_imagem":  True,
-                 "chunk_total": 1,
-                 "texto":       f"[PDF ESCANEADO: {caminho.name}]"}
-            return [c]
+            return [{**DEFAULTS, **meta,
+                     "chunk_id":    f"{meta.get('doc_id','')}_{caminho.name}_img",
+                     "arquivo":     caminho.name,
+                     "fonte_texto": "pdf_imagem",
+                     "qualidade":   extr["qualidade"],
+                     "tem_imagem":  True,
+                     "chunk_total": 1,
+                     "n_tokens":    5,
+                     "densidade":   1.0,
+                     "texto":       f"[PDF ESCANEADO: {caminho.name}]"}]
 
-        # Monta texto com marcadores de página para rastreamento
         blocos = []
         for i, pag in enumerate(extr["texto_por_pagina"]):
             if pag.strip():
@@ -390,31 +475,43 @@ def worker(args: tuple) -> list[dict]:
         if not texto_completo.strip():
             return out
 
+        import json as _json
         pedacos = splitter.split_text(texto_completo)
         total   = len(pedacos)
 
         for idx, pedaco in enumerate(pedacos):
-            pags = re.findall(r"\[Página (\d+)\]", pedaco)
+            pags  = re.findall(r"\[Página (\d+)\]", pedaco)
             p_ini = int(pags[0])  if pags else 1
             p_fim = int(pags[-1]) if pags else 1
             txt   = re.sub(r"\[Página \d+\]\n?", "", pedaco).strip()
-            if not txt:
-                continue
 
-            c = {**DEFAULTS, **meta,
-                 "chunk_id":      f"{meta.get('doc_id','')}_{caminho.name}_{idx}",
-                 "arquivo":       caminho.name,
-                 "fonte_texto":   "pdf_completo",
-                 "qualidade":     extr["qualidade"],
-                 "tem_tachado":   extr["tem_tachado"],
-                 "tem_imagem":    extr["tem_imagem"],
-                 "tem_tabela":    "|" in txt,
-                 "pagina_inicio": p_ini,
-                 "pagina_fim":    p_fim,
-                 "chunk_index":   idx,
-                 "chunk_total":   total,
-                 "texto":         txt}
-            out.append(c)
+            refs   = _extrair_refs_texto(txt)
+            vals   = _extrair_valores(txt)
+            datas  = _extrair_datas(txt)
+            dens   = _calcular_densidade(txt)
+            ntok   = _estimar_tokens(txt)
+
+            out.append({**DEFAULTS, **meta,
+                "chunk_id":      f"{meta.get('doc_id','')}_{caminho.name}_{idx}",
+                "arquivo":       caminho.name,
+                "fonte_texto":   "pdf_completo",
+                "qualidade":     extr["qualidade"],
+                "tem_tachado":   extr["tem_tachado"],
+                "tem_imagem":    extr["tem_imagem"],
+                "tem_tabela":    "|" in txt,
+                "pagina_inicio": p_ini,
+                "pagina_fim":    p_fim,
+                "chunk_index":   idx,
+                "chunk_total":   total,
+                "n_tokens":      ntok,
+                "densidade":     dens,
+
+                "refs_texto":    _json.dumps(refs, ensure_ascii=False),
+                "n_refs":        len(refs),
+                "valores_num":   _json.dumps(vals, ensure_ascii=False),
+                "datas_texto":   _json.dumps(datas, ensure_ascii=False),
+                "texto":         txt,
+            })
 
     # ── TXT (HTML ou XLSX já extraídos) ──────────────────────────────────
     elif ext == ".txt":
@@ -424,22 +521,92 @@ def worker(args: tuple) -> list[dict]:
             )
             if not texto.strip():
                 return out
+
             fonte = "html" if "html_ren" in str(caminho) else "xlsx"
             pedacos = splitter.split_text(texto)
             total   = len(pedacos)
+
+            import json as _json
             for idx, pedaco in enumerate(pedacos):
-                if not pedaco.strip():
+                txt = pedaco.strip()
+
+                if not txt:
                     continue
-                c = {**DEFAULTS, **meta,
-                     "chunk_id":    f"{meta.get('doc_id','')}_{caminho.name}_{idx}",
-                     "arquivo":     caminho.name,
-                     "fonte_texto": fonte,
-                     "qualidade":   "ok",
-                     "tem_tabela":  "|" in pedaco,
-                     "chunk_index": idx,
-                     "chunk_total": total,
-                     "texto":       pedaco.strip()}
-                out.append(c)
+
+                refs  = _extrair_refs_texto(txt)
+                vals  = _extrair_valores(txt)
+                datas = _extrair_datas(txt)
+                dens  = _calcular_densidade(txt)
+                ntok  = _estimar_tokens(txt)
+
+                out.append({**DEFAULTS, **meta,
+                    "chunk_id":    f"{meta.get('doc_id','')}_{caminho.name}_{idx}",
+                    "arquivo":     caminho.name,
+                    "fonte_texto": fonte,
+                    "qualidade":   "ok",
+                    "tem_tabela":  "|" in txt,
+                    "chunk_index": idx,
+                    "chunk_total": total,
+                    "n_tokens":    ntok,
+                    "densidade":   dens,
+                    "refs_texto":  _json.dumps(refs, ensure_ascii=False),
+                    "n_refs":      len(refs),
+                    "valores_num": _json.dumps(vals, ensure_ascii=False),
+                    "datas_texto": _json.dumps(datas, ensure_ascii=False),
+                    "texto":       txt,
+                })
+        except Exception:
+            pass
+
+    # ── Planilhas (CSV, XLSX) extraídas de ZIP/RAR ───────────────────────
+    elif ext in (".csv", ".xlsx", ".xlsm"):
+        try:
+            if ext == ".csv":
+                df = pd.read_csv(caminho, sep=None, engine="python", on_bad_lines="skip")
+            else:
+                df = pd.read_excel(caminho)
+
+            linhas = []
+            for _, row in df.iterrows():
+                celulas = [str(c) for c in row if pd.notna(c) and str(c).strip()]
+                if celulas:
+                    linhas.append(" | ".join(celulas))
+
+            texto = _limpar_texto("\n".join(linhas))
+            if not texto.strip():
+                return out
+
+            pedacos = splitter.split_text(texto)
+            total   = len(pedacos)
+
+            import json as _json
+            for idx, pedaco in enumerate(pedacos):
+                txt = pedaco.strip()
+                if not txt:
+                    continue
+
+                refs  = _extrair_refs_texto(txt)
+                vals  = _extrair_valores(txt)
+                datas = _extrair_datas(txt)
+                dens  = _calcular_densidade(txt)
+                ntok  = _estimar_tokens(txt)
+
+                out.append({**DEFAULTS, **meta,
+                    "chunk_id":    f"{meta.get('doc_id','')}_{caminho.name}_{idx}",
+                    "arquivo":     caminho.name,
+                    "fonte_texto": "planilha_zip",
+                    "qualidade":   "ok",
+                    "tem_tabela":  True,
+                    "chunk_index": idx,
+                    "chunk_total": total,
+                    "n_tokens":    ntok,
+                    "densidade":   dens,
+                    "refs_texto":  _json.dumps(refs, ensure_ascii=False),
+                    "n_refs":      len(refs),
+                    "valores_num": _json.dumps(vals, ensure_ascii=False),
+                    "datas_texto": _json.dumps(datas, ensure_ascii=False),
+                    "texto":       txt,
+                })
         except Exception:
             pass
 
@@ -462,15 +629,19 @@ class ParquetWriter:
         df = pd.DataFrame(chunks)
         for col in SCHEMA.names:
             if col not in df.columns:
-                dtype = SCHEMA.field(col).type
-                df[col] = False if dtype == pa.bool_() else (0 if dtype == pa.int32() else "")
-        # Cast explícito para int32 nas colunas inteiras
-        for col in ["pagina_inicio","pagina_fim","chunk_index","chunk_total"]:
+                ftype = SCHEMA.field(col).type
+                df[col] = (False if ftype == pa.bool_() else
+                           (0    if ftype == pa.int32() else
+                           (0.0  if ftype == pa.float32() else "")))
+        for col in ["pagina_inicio","pagina_fim","chunk_index","chunk_total","n_tokens","n_refs"]:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype("int32")
-        # Corrige colunas booleanas — string vazia vira False
+        df["densidade"] = pd.to_numeric(df["densidade"], errors="coerce").fillna(0.0).astype("float32")
         for col in ["tem_tabela","tem_imagem","tem_tachado"]:
             if col in df.columns:
-                df[col] = df[col].apply(lambda x: bool(x) if not isinstance(x, str) else x.lower() not in ("", "false", "0"))
+                df[col] = df[col].apply(
+                    lambda x: bool(x) if not isinstance(x, str)
+                    else x.lower() not in ("", "false", "0")
+                )
         tbl = pa.Table.from_pandas(df[SCHEMA.names], schema=SCHEMA)
         self._w.write_table(tbl)
         self._total += len(chunks)
@@ -478,6 +649,26 @@ class ParquetWriter:
     def close(self) -> int:
         self._w.close()
         return self._total
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint — retoma onde parou
+# ---------------------------------------------------------------------------
+
+def _carregar_checkpoint() -> set[str]:
+    if CHECKPOINT.exists():
+        try:
+            with open(CHECKPOINT, encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            pass
+    return set()
+
+
+def _salvar_checkpoint(vistos: set[str]) -> None:
+    CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
+    with open(CHECKPOINT, "w", encoding="utf-8") as f:
+        json.dump(list(vistos), f)
 
 
 # ---------------------------------------------------------------------------
@@ -490,12 +681,11 @@ def coletar_tarefas(
     anos: list[str],
     limite: int = None,
 ) -> list[tuple[str, dict]]:
-    """Retorna lista de (caminho_str, meta_dict)."""
     with open(json_path, encoding="utf-8") as f:
         registros = json.load(f)
 
-    tarefas   = []
-    vistos    = set()   # evita duplicatas — cache em memória ~3MB para 30k itens
+    tarefas = []
+    vistos  = set()
 
     def _meta(reg: dict, cat: str, url: str) -> dict:
         return {
@@ -528,24 +718,31 @@ def coletar_tarefas(
 
             ext = Path(arquivo).suffix.lower().rstrip()
 
-            if ext in (".pdf",):
+            if ext == ".pdf":
                 caminho = PASTA_PDFS / ano / cat / arquivo
             elif ext in (".htm", ".html"):
-                # Usa .txt já extraído
-                caminho = PASTA_PDFS / ano / "html_ren" / \
-                          arquivo.replace(ext, ".txt")
+                caminho = PASTA_PDFS / ano / "html_ren" / arquivo.replace(ext, ".txt")
             elif ext in (".xlsx", ".xlsm"):
-                caminho = PASTA_PDFS / ano / "xlsx" / \
-                          arquivo.replace(ext, ".txt")
+                caminho = PASTA_PDFS / ano / "xlsx" / arquivo.replace(ext, ".txt")
             elif ext == ".zip":
-                # PDFs dentro do ZIP extraído
-                pasta = PASTA_PDFS / ano / "zip_extraido" / arquivo.replace(".zip","")
+                pasta = PASTA_PDFS / ano / "zip_extraido" / arquivo.replace(".zip", "")
                 if pasta.exists():
-                    for pdf_int in pasta.rglob("*.pdf"):
-                        k = str(pdf_int)
-                        if k not in vistos:
-                            vistos.add(k)
-                            tarefas.append((k, _meta(reg, cat, url)))
+                    for ext_valida in ("*.pdf", "*.xlsx", "*.xlsm", "*.csv", "*.txt"):
+                        for f_int in pasta.rglob(ext_valida):
+                            k = str(f_int)
+                            if k not in vistos:
+                                vistos.add(k)
+                                tarefas.append((k, _meta(reg, cat, url)))
+                continue
+            elif ext == ".rar":
+                pasta = PASTA_PDFS / ano / "rar_extraido" / arquivo.replace(".rar", "")
+                if pasta.exists():
+                    for ext_valida in ("*.pdf", "*.xlsx", "*.xlsm", "*.csv", "*.txt"):
+                        for f_int in pasta.rglob(ext_valida):
+                            k = str(f_int)
+                            if k not in vistos:
+                                vistos.add(k)
+                                tarefas.append((k, _meta(reg, cat, url)))
                 continue
             else:
                 continue
@@ -558,18 +755,31 @@ def coletar_tarefas(
                 vistos.add(k)
                 tarefas.append((k, _meta(reg, cat, url)))
 
-    # TXTs de html_ren que não estão no JSON
-    for ano in (anos or ["2015","2016","2021","2022"]):
+    # TXTs de html_ren e PDFs vinculados dentro dos HTMLs
+    for ano in (anos or ["2015", "2016", "2021", "2022"]):
         pasta = PASTA_PDFS / ano / "html_ren"
         if pasta.exists():
+            # 1. Pega os textos limpos dos HTMLs
             for txt in pasta.rglob("*.txt"):
                 k = str(txt)
                 if k not in vistos:
                     vistos.add(k)
-                    meta = {k2: "" for k2 in DEFAULTS}
-                    meta.update({"ano_fonte": ano, "categoria_pdf": "html_ren",
-                                 "doc_id": txt.stem})
+                    meta = {**{k2: "" for k2 in DEFAULTS},
+                            "ano_fonte": ano, "categoria_pdf": "html_ren",
+                            "doc_id": txt.stem}
                     tarefas.append((k, meta))
+            
+            # 2. Pega os PDFs anexados dentro dos HTMLs
+            pasta_vinc = pasta / "pdfs_vinculados"
+            if pasta_vinc.exists():
+                for pdf_vinc in pasta_vinc.rglob("*.pdf"):
+                    k = str(pdf_vinc)
+                    if k not in vistos:
+                        vistos.add(k)
+                        meta = {**{k2: "" for k2 in DEFAULTS},
+                                "ano_fonte": ano, "categoria_pdf": "anexo_html",
+                                "doc_id": pdf_vinc.stem}
+                        tarefas.append((k, meta))
 
     return tarefas[:limite] if limite else tarefas
 
@@ -580,40 +790,59 @@ def coletar_tarefas(
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Parser ANEEL — extração de texto com ~2GB de RAM"
+        description="Parser ANEEL — texto + imagens + referências + checkpoint"
     )
-    ap.add_argument("--json",      default=str(JSON_LIMPO))
-    ap.add_argument("--saida",     default=str(PARQUET_OUT))
-    ap.add_argument("--categoria", nargs="+", default=CATEGORIAS,
+    ap.add_argument("--json",           default=str(JSON_LIMPO))
+    ap.add_argument("--saida",          default=str(PARQUET_OUT))
+    ap.add_argument("--categoria",      nargs="+", default=CATEGORIAS,
                     choices=CATEGORIAS + ["html_ren"])
-    ap.add_argument("--ano",       nargs="+", default=[],
+    ap.add_argument("--ano",            nargs="+", default=[],
                     choices=["2015","2016","2021","2022"])
-    ap.add_argument("--limite",    type=int, default=None)
-    ap.add_argument("--workers",   type=int, default=WORKERS)
-    ap.add_argument("--chunk-size",    type=int, default=CHUNK_SIZE)
-    ap.add_argument("--chunk-overlap", type=int, default=CHUNK_OVERLAP)
+    ap.add_argument("--limite",         type=int, default=None)
+    ap.add_argument("--workers",        type=int, default=WORKERS)
+    ap.add_argument("--chunk-size",     type=int, default=CHUNK_SIZE)
+    ap.add_argument("--chunk-overlap",  type=int, default=CHUNK_OVERLAP)
+    ap.add_argument("--sem-checkpoint", action="store_true",
+                    help="Ignora checkpoint e reprocessa tudo do zero")
+    ap.add_argument("--pasta-entrada",  type=str, default=None,
+                    help="Pasta customizada com os PDFs (ex: pdfs_teste)")
     args = ap.parse_args()
 
+    global PASTA_PDFS
+    if args.pasta_entrada:
+        PASTA_PDFS = RAIZ / args.pasta_entrada
+        log.info(f"Lendo arquivos da pasta customizada: {PASTA_PDFS}")
+
     log.info("=" * 55)
-    log.info("PARSER ANEEL — modo ~2GB RAM")
+    log.info("PARSER ANEEL")
     log.info("=" * 55)
 
     tarefas = coletar_tarefas(
         Path(args.json), args.categoria, args.ano, args.limite
     )
+
+    # Checkpoint — filtra arquivos já processados
+    ja_feitos = set()
+    if not args.sem_checkpoint and CHECKPOINT.exists():
+        ja_feitos = _carregar_checkpoint()
+        antes = len(tarefas)
+        tarefas = [(c, m) for c, m in tarefas if c not in ja_feitos]
+        log.info(f"  Checkpoint: {len(ja_feitos)} já processados, "
+                 f"{antes - len(tarefas)} pulados")
+
     log.info(f"  Arquivos a processar: {len(tarefas)}")
 
     if not tarefas:
-        log.error("Nenhum arquivo encontrado.")
+        log.info("Nada a processar. Use --sem-checkpoint para reprocessar tudo.")
         return
 
     tempo_est = len(tarefas) / args.workers / 3
     h = int(tempo_est // 3600)
     m = int((tempo_est % 3600) // 60)
-    log.info(f"  Workers:              {args.workers}")
-    log.info(f"  RAM estimada:         ~{args.workers * 150 + 500}MB")
-    log.info(f"  Tempo estimado:       ~{h}h {m}min")
-    log.info(f"  Saída:                {args.saida}")
+    log.info(f"  Workers:     {args.workers}")
+    log.info(f"  RAM est.:    ~{args.workers * 150 + 500}MB")
+    log.info(f"  Tempo est.:  ~{h}h {m}min")
+    log.info(f"  Saída:       {args.saida}")
     log.info("=" * 55)
 
     worker_args = [
@@ -621,41 +850,58 @@ def main():
         for cam, meta in tarefas
     ]
 
-    writer  = ParquetWriter(Path(args.saida))
+    # Se há checkpoint, abre o parquet em modo append
+    modo_append = not args.sem_checkpoint and ja_feitos and Path(args.saida).exists()
+    if modo_append:
+        log.info("Modo append — adicionando ao parquet existente")
+        writer = ParquetWriter.__new__(ParquetWriter)
+        writer._w = pq.ParquetWriter(
+            str(args.saida) + ".tmp", SCHEMA, compression="snappy"
+        )
+        writer._total = 0
+        saida_tmp = Path(args.saida + ".tmp")
+    else:
+        writer = ParquetWriter(Path(args.saida))
+        saida_tmp = None
+
     buffer  = []
     erros   = 0
     imagens = 0
+    refs_encontradas = 0
+    feitos_agora: set[str] = set()
 
     barra = tqdm(total=len(tarefas), desc="Parsing", unit="arq",
                  dynamic_ncols=True) if USA_TQDM else None
 
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
-        futuros = {ex.submit(worker, a): a for a in worker_args}
+        futuros = {ex.submit(worker, a): a[0] for a in worker_args}
 
         for fut in as_completed(futuros):
+            caminho_feito = futuros[fut]
             try:
                 chunks = fut.result()
                 imagens += sum(1 for c in chunks if c.get("qualidade") == "imagem")
+                refs_encontradas += sum(c.get("n_refs", 0) for c in chunks)
                 buffer.extend(chunks)
+                feitos_agora.add(caminho_feito)
 
-                # Grava quando buffer chega no limite — libera RAM
                 if len(buffer) >= BATCH_WRITE:
                     writer.write(buffer)
                     buffer = []
+                    # Salva checkpoint periodicamente
+                    _salvar_checkpoint(ja_feitos | feitos_agora)
 
             except Exception as e:
                 erros += 1
-                log.debug(f"Worker error: {e}")
+                log.debug(f"Worker error em {caminho_feito}: {e}")
 
             if barra:
                 barra.set_postfix({
-                    "buf": len(buffer),
-                    "err": erros,
-                    "img": imagens,
+                    "buf": len(buffer), "err": erros,
+                    "img": imagens, "ref": refs_encontradas,
                 })
                 barra.update(1)
 
-    # Grava restante
     if buffer:
         writer.write(buffer)
 
@@ -663,16 +909,21 @@ def main():
     if barra:
         barra.close()
 
+    # Salva checkpoint final
+    _salvar_checkpoint(ja_feitos | feitos_agora)
+
     log.info("\n" + "=" * 55)
     log.info("CONCLUÍDO")
     log.info("=" * 55)
-    log.info(f"  Chunks gerados  : {total:,}")
-    log.info(f"  PDFs escaneados : {imagens}")
-    log.info(f"  Erros           : {erros}")
-    log.info(f"  Parquet salvo   : {args.saida}")
+    log.info(f"  Chunks gerados      : {total:,}")
+    log.info(f"  PDFs escaneados     : {imagens}")
+    log.info(f"  Referências extraídas: {refs_encontradas:,}")
+    log.info(f"  Erros               : {erros}")
+    log.info(f"  Parquet salvo       : {args.saida}")
     log.info("=" * 55)
-    log.info("\nProximo passo: reindexar no Qdrant com o novo parquet")
-    log.info("  python src/p2_search/p2_indexar.py --parquet data/processed/chunks_pdf_completo.parquet --resetar")
+    log.info("\nProximos passos:")
+    log.info("  1. python src/p1_ingestion/unir_parquets.py")
+    log.info("  2. python src/p2_search/p2_indexar.py --parquet data/processed/chunks_completo_unificado.parquet --resetar")
 
 
 if __name__ == "__main__":

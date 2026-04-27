@@ -14,7 +14,11 @@ Trata automaticamente todos os tipos de arquivo encontrados:
 
 Pré-requisitos:
   pip install curl_cffi tqdm beautifulsoup4 openpyxl
-  pip install rarfile  (opcional, para extrair RARs)
+
+  7-Zip na raiz do projeto (sem instalação necessária):
+    Windows → copie 7z.exe e 7z.dll para a raiz do projeto
+              Download: https://www.7-zip.org/
+    Linux   → copie /usr/bin/7z para a raiz do projeto
 
 Uso:
   # Download completo (padrão — texto_integral):
@@ -57,6 +61,9 @@ from io import BytesIO
 from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import local
+
+import os
+import subprocess
 
 from curl_cffi import requests as curl_requests
 from tqdm import tqdm
@@ -106,6 +113,49 @@ HEADERS = {
 }
 
 _thread_local = local()
+
+
+# ---------------------------------------------------------------------------
+# 7-Zip — extração sem instalação
+# ---------------------------------------------------------------------------
+
+def get_7z_path() -> str:
+    """
+    Retorna o caminho do executável 7z.
+    Prioridade: raiz do projeto → instalação padrão do sistema.
+    Coloque 7z.exe (Windows) ou 7z (Linux) na raiz do projeto
+    para funcionar sem nenhuma instalação.
+    """
+    if os.name == "nt":  # Windows
+        local = RAIZ / "7z.exe"
+        local_dir = RAIZ / "7-Zip" / "7z.exe"
+        if local.exists():
+            return str(local)
+        elif local_dir.exists():
+            return str(local_dir)
+        return r"C:\Program Files\7-Zip\7z.exe"
+    else:  # Linux / Mac
+        local = RAIZ / "7z"
+        if local.exists():
+            return str(local)
+        return "7z"
+
+
+def extrair_com_7z(arquivo_path: Path, pasta_destino: Path) -> bool:
+    """Extrai qualquer arquivo (ZIP, RAR, 7z, TAR...) usando o 7-Zip."""
+    exe = get_7z_path()
+    try:
+        resultado = subprocess.run(
+            [exe, "x", str(arquivo_path), f"-o{pasta_destino}", "-y"],
+            capture_output=True, text=True, timeout=300
+        )
+        return resultado.returncode == 0
+    except FileNotFoundError:
+        log.error(f"7-Zip não encontrado em '{exe}'. Coloque 7z.exe na raiz do projeto.")
+        return False
+    except subprocess.TimeoutExpired:
+        log.error(f"Timeout ao extrair {arquivo_path.name}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -313,31 +363,49 @@ def baixar_html(url: str, arquivo: str, ano: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def baixar_zip(url: str, arquivo: str, ano: str) -> dict:
-    """Baixa ZIP e extrai conteúdo na pasta correta."""
-    pasta = PASTA_PDFS / ano / "zip_extraido" / arquivo.replace(".zip", "")
+    """Baixa ZIP em streaming (chunk a chunk para o disco) e extrai conteúdo."""
+    pasta    = PASTA_PDFS / ano / "zip_extraido" / arquivo.replace(".zip", "")
     pasta.mkdir(parents=True, exist_ok=True)
+    zip_path = pasta.parent / arquivo  # arquivo temporário em disco
 
     session = get_session()
 
     # Backoff exponencial: tenta com timeouts crescentes
-    timeouts = [30, 60, 120, 240]
-    resp = None
+    timeouts   = [60, 120, 240, 480]
     ultimo_erro = ""
+    baixado    = False
 
     for t in timeouts:
         try:
-            resp = session.get(url, timeout=t)
-            if resp.status_code == 200:
+            # ── Streaming: grava chunk a chunk direto no disco ──────────────
+            # Nunca carrega o ZIP inteiro na RAM — resolve travamento no Docker
+            zip_path.parent.mkdir(parents=True, exist_ok=True)
+            status_code = None
+
+            with open(zip_path, "wb") as f_out:
+                def _on_chunk(data: bytes) -> None:
+                    f_out.write(data)
+
+                resp = session.get(url, timeout=t, content_callback=_on_chunk)
+                status_code = resp.status_code
+
+            if status_code == 200:
+                baixado = True
                 break
-            ultimo_erro = f"HTTP {resp.status_code}"
+            else:
+                zip_path.unlink(missing_ok=True)
+                ultimo_erro = f"HTTP {status_code}"
+
         except Exception as e:
+            zip_path.unlink(missing_ok=True)
             ultimo_erro = str(e)[:80]
-            log.info(f"    Timeout em {t}s para {arquivo} — tentando com {min(t*2, 240)}s...")
+            log.info(f"    Timeout em {t}s para {arquivo} — tentando com {min(t*2, 480)}s...")
             time.sleep(2)
 
-    if resp is None or resp.status_code != 200:
+    if not baixado:
         return {"status": "erro_timeout", "url": url, "erro": ultimo_erro}
 
+    # ── Extração do ZIP já salvo em disco ───────────────────────────────────
     extraidos = 0
     pulados   = 0
 
@@ -346,17 +414,13 @@ def baixar_zip(url: str, arquivo: str, ano: str) -> dict:
         Sanitiza nome de arquivo/pasta extraído do ZIP para funcionar no Windows.
         Remove caracteres ilegais, preserva a estrutura de subpastas.
         """
-        import unicodedata
         partes = nome.replace("\\", "/").split("/")
         partes_limpas = []
         chars_ilegais = r'<>:"|?*'
         for parte in partes:
-            # Remove caracteres ilegais no Windows
             for c in chars_ilegais:
                 parte = parte.replace(c, "_")
-            # Remove espaços no início e fim, e pontos no final
             parte = parte.strip().rstrip(".")
-            # Limita comprimento de cada parte
             if len(parte) > 100:
                 parte = parte[:100]
             if parte:
@@ -364,29 +428,24 @@ def baixar_zip(url: str, arquivo: str, ano: str) -> dict:
         return "/".join(partes_limpas)
 
     try:
-        with zipfile.ZipFile(BytesIO(resp.content)) as z:
+        with zipfile.ZipFile(zip_path) as z:
             for nome_interno in z.namelist():
-                # Ignora diretórios
                 if nome_interno.endswith("/") or nome_interno.endswith("\\"):
                     continue
 
-                # Sanitiza o caminho para Windows
                 nome_limpo = sanitizar_caminho(nome_interno)
                 if not nome_limpo:
                     continue
 
                 destino = pasta / nome_limpo
 
-                # Cria pastas pai de forma segura
                 try:
                     destino.parent.mkdir(parents=True, exist_ok=True)
                 except OSError:
-                    # Se ainda falhar, tenta caminho mais curto (só o arquivo)
                     nome_arquivo = Path(nome_limpo).name
                     destino = pasta / nome_arquivo
                     destino.parent.mkdir(parents=True, exist_ok=True)
 
-                # Pula se já existe com conteúdo
                 if destino.exists() and destino.stat().st_size > 0:
                     pulados += 1
                     continue
@@ -398,10 +457,10 @@ def baixar_zip(url: str, arquivo: str, ano: str) -> dict:
                     pulados += 1
 
     except zipfile.BadZipFile:
-        zip_bruto = pasta / arquivo
-        if not zip_bruto.exists():
-            zip_bruto.write_bytes(resp.content)
         return {"status": "erro_zip_corrompido", "url": url}
+    finally:
+        # Remove o ZIP temporário após extrair (sucesso ou falha)
+        zip_path.unlink(missing_ok=True)
 
     if extraidos == 0 and pulados > 0:
         return {"status": "pulado", "arquivo": arquivo}
@@ -457,33 +516,31 @@ def baixar_xlsx(url: str, arquivo: str, ano: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def baixar_rar(url: str, arquivo: str, ano: str) -> dict:
-    """Baixa RAR e extrai conteúdo."""
-    pasta = PASTA_PDFS / ano / "rar_extraido" / arquivo.replace(".rar", "")
+    """Baixa RAR em streaming (chunk a chunk para o disco) e extrai conteúdo."""
+    pasta    = PASTA_PDFS / ano / "rar_extraido" / arquivo.replace(".rar", "")
     pasta.mkdir(parents=True, exist_ok=True)
     rar_path = pasta / arquivo
 
     session = get_session()
     try:
-        resp = session.get(url, timeout=TIMEOUT)
-        if resp.status_code != 200:
-            return {"status": f"erro_{resp.status_code}", "url": url}
+        # ── Streaming: grava chunk a chunk direto no disco ──────────────────
+        status_code = None
+        with open(rar_path, "wb") as f_out:
+            def _on_chunk(data: bytes) -> None:
+                f_out.write(data)
+            resp = session.get(url, timeout=TIMEOUT_ZIP, content_callback=_on_chunk)
+            status_code = resp.status_code
 
-        rar_path.write_bytes(resp.content)
+        if status_code != 200:
+            rar_path.unlink(missing_ok=True)
+            return {"status": f"erro_{status_code}", "url": url}
 
-        try:
-            import rarfile
-            rarfile.UNRAR_TOOL = r"C:\Program Files\7-Zip\7z.exe"
-            with rarfile.RarFile(rar_path) as r:
-                r.extractall(pasta)
-            rar_path.unlink()
+        # Extrai com 7z (suporta RAR, ZIP, 7z, TAR sem dependências extras)
+        if extrair_com_7z(rar_path, pasta):
+            rar_path.unlink(missing_ok=True)
             return {"status": "ok", "tipo": "rar"}
-        except ImportError:
-            log.warning("rarfile nao instalado: pip install rarfile")
-            return {"status": "ok_nao_extraido", "tipo": "rar"}
-        except Exception as e:
-            log.warning(f"RAR nao extraido: {e}")
-            log.warning("Instale o 7-Zip: https://www.7-zip.org/")
-            return {"status": "ok_nao_extraido", "tipo": "rar", "nota": "instale 7-Zip para extrair"}
+        else:
+            return {"status": "ok_nao_extraido", "tipo": "rar", "nota": "7z não encontrado ou falhou"}
 
     except Exception as e:
         return {"status": "erro_timeout", "url": url, "erro": str(e)[:60]}
@@ -603,25 +660,31 @@ def coletar_retry(falhas_path: Path) -> list:
 # ---------------------------------------------------------------------------
 
 def baixar_todos(downloads: list, workers: int, desc: str = "Baixando") -> tuple:
-    """Executa downloads em paralelo com múltiplos workers."""
+    """Executa downloads em paralelo com múltiplos workers, em lotes para controlar RAM."""
     resultados = defaultdict(int)
     falhas     = []
+    LOTE       = 1000  # processa 1000 futures por vez — evita acumular 25k na RAM
 
     barra = tqdm(total=len(downloads), desc=desc, unit="arq", dynamic_ncols=True)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futuros = {executor.submit(baixar_um, item): item for item in downloads}
-        for futuro in as_completed(futuros):
-            r = futuro.result()
-            resultados[r["status"]] += 1
-            barra.update(1)
+        for i in range(0, len(downloads), LOTE):
+            lote    = downloads[i:i + LOTE]
+            futuros = {executor.submit(baixar_um, item): item for item in lote}
 
-            n_ok  = resultados.get("ok", 0) + resultados.get("pulado", 0)
-            n_err = sum(v for k, v in resultados.items() if k.startswith("erro"))
-            barra.set_postfix({"ok": n_ok, "erros": n_err, "arq": r["arquivo"][:18]})
+            for futuro in as_completed(futuros):
+                r = futuro.result()
+                resultados[r["status"]] += 1
+                barra.update(1)
 
-            if r["status"].startswith("erro") and r["status"] != "erro_404":
-                falhas.append({**futuros[futuro], "status": r["status"], **{k: v for k, v in r.items() if k != "arquivo"}})
+                n_ok  = resultados.get("ok", 0) + resultados.get("pulado", 0)
+                n_err = sum(v for k, v in resultados.items() if k.startswith("erro"))
+                barra.set_postfix({"ok": n_ok, "erros": n_err, "arq": r["arquivo"][:18]})
+
+                if r["status"].startswith("erro") and r["status"] != "erro_404":
+                    falhas.append({**futuros[futuro], "status": r["status"], **{k: v for k, v in r.items() if k != "arquivo"}})
+
+                del futuros[futuro]  # libera o future da RAM imediatamente após processar
 
     barra.close()
     return dict(resultados), falhas
@@ -668,7 +731,17 @@ def main():
         "--retry-falhas", action="store_true",
         help="Relê pdfs/falhas_download.json e retenta (exceto 404)",
     )
+    parser.add_argument(
+        "--pasta-saida", type=str, default=None,
+        help="Pasta customizada para salvar os PDFs (ex: pdfs_teste)",
+    )
     args = parser.parse_args()
+
+    # Redireciona a saída se solicitado
+    global PASTA_PDFS
+    if args.pasta_saida:
+        PASTA_PDFS = RAIZ / args.pasta_saida
+        PASTA_PDFS.mkdir(parents=True, exist_ok=True)
 
     # Avisa sobre dependências opcionais
     if not TEM_BS4:
