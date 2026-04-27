@@ -111,7 +111,7 @@ cd RAG-ANEEL-CEIA
 pip install -r requirements.txt
 ```
 
-> Na primeira execução do pipeline, o modelo de embeddings `paraphrase-multilingual-MiniLM-L12-v2` (~120 MB) será baixado automaticamente pelo `sentence-transformers` e ficará em cache.
+> Na primeira execução do pipeline, o modelo de embeddings `paraphrase-multilingual-MiniLM-L12-v2` (~120 MB) será baixado automaticamente pelo `sentence-transformers` e ficará em cache. Se o arquivo `index_manual/embeddings_bge_m3.npy` existir (gerado no Colab), o sistema usa automaticamente o BGE-M3 (1024 dims) no lugar.
 
 ---
 
@@ -412,12 +412,14 @@ RAG-ANEEL-CEIA/
 │   ├── api/
 │   │   ├── main.py                # FastAPI: endpoints, cache LRU
 │   │   ├── query_optimizer.py     # rewriting, HyDE, decomposição, memória
-│   │   ├── llm_chain.py           # geração com Groq/DeepSeek, 6 prompts adaptativos
+│   │   ├── llm_chain.py           # geração com Qwen→Groq→Gemini, 6 prompts adaptativos
 │   │   └── analytics.py           # perguntas analíticas via pandas (sem LLM)
 │   └── utils/
 │       └── logger_metrics.py      # logger configurado
 ├── tests/
-│   └── banco_perguntas.py         # 45 perguntas + avaliação RAGAS
+│   └── banco_perguntas.py         # 45 perguntas categorizadas (importável)
+├── banco_perguntas.py              # cópia na raiz (uso direto)
+├── eval_ragas.py                   # CLI de avaliação RAGAS
 ├── app.py                          # interface Streamlit
 ├── docker-compose.yml
 ├── requirements.txt
@@ -453,19 +455,26 @@ Streamlit  (app.py — porta 8501)
 
 ### Busca híbrida
 
-| Canal | Tecnologia | Peso |
+Os pesos são **dinâmicos por tipo de query** — o BM25 domina para buscas gerais (termos técnicos exatos), o semântico ganha mais peso em queries complexas:
+
+| Tipo de query | Peso semântico | Peso BM25 |
 |---|---|---|
-| Semântico | Qdrant + MiniLM-L12-v2 (384 dims) | 0.6 |
-| Lexical | BM25Okapi sobre corpus PT-BR | 0.4 |
-| Expansão | Chunks vizinhos (±2 ao chunk base) | — |
-| Filtros | Número e ano do ato extraídos via regex | — |
-| Fallback | Busca sem filtro quando score < 0.5 | — |
+| busca geral / resumo | 0.30 | 0.70 |
+| procedimento / híbrida complexa | 0.40 | 0.60 |
 
-### Upgrade de embedding (opcional — Google Colab)
+| Recurso | Detalhe |
+|---|---|
+| Semântico | Qdrant + BGE-M3 1024 dims (ou MiniLM 384 dims como fallback) |
+| Lexical | BM25Okapi sobre corpus PT-BR |
+| Expansão | Chunks vizinhos (±2 ao chunk base) |
+| Filtros | Número e ano do ato extraídos via regex da query |
+| Fallback | Busca sem filtro quando score < 0.5 — marca `busca_fallback=True` |
 
-O sistema detecta automaticamente se o índice BGE-M3 (`bge_index.bin`) existe na raiz do projeto. Se existir, usa BGE-M3 (1024 dims, ~+20% qualidade semântica). Caso contrário, usa MiniLM local.
+### Embedding BGE-M3 (Google Colab)
 
-Para gerar o índice BGE-M3, rodar `p2_indexar.py` em uma máquina com GPU (ex: Google Colab com T4/L4 — gratuito). A indexação de 562k chunks leva ~25 min na GPU L4.
+O sistema detecta automaticamente se `index_manual/embeddings_bge_m3.npy` existe. Se existir, usa BGE-M3 (1024 dims, ~+20% qualidade semântica). Caso contrário, usa MiniLM local (384 dims).
+
+Para gerar o arquivo, rodar `p2_indexar.py` em uma máquina com GPU (ex: Google Colab com T4/L4 — gratuito). A indexação de 562k chunks leva ~25 min na GPU L4.
 
 ### Stack completa
 
