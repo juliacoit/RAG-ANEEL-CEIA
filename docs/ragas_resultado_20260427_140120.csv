@@ -1,0 +1,46 @@
+﻿id,categoria,tipo_busca,tipo_esperado,dificuldade,pergunta,resposta,n_contextos,latencia_ms,fontes,faithfulness,response_relevancy,context_precision
+MG-01,microgeracao,semantica,resposta_encontrada,facil,O que é microgeração distribuída segundo a ANEEL?,"Conforme o Trecho 4, a microgeração distribuída é definida como aquela que se enquadre na modalidade autoconsumo local, definido no inciso I-B do art. 2º, com potência instalada de geração igual ou inferior a 7,5 kW, observadas as disposições deste artigo (Incluído pela REN ANEEL 1.098, de 23.07.2024). No entanto, não há uma definição explícita do termo ""microgeração distribuída"" nos trechos fornecidos.
+
+No entanto, podemos encontrar uma menção ao termo ""microgeração distribuída"" no Trecho 3, que se refere à entrega do Relacionamento Operacional para a microgeração distribuída, conforme modelo do Anexo 3.D. Além disso, o Trecho 1 também menciona a microgeração distribuída, definindo a potência de geração distribuída compatível com o consumo da unidade consumidora durante o período de geração.
+
+Portanto, embora não haja uma definição explícita do termo ""microgeração distribuída"", podemos inferir que se refere a uma modalidade de geração de energia elétrica distribuída, com potência instalada de geração igual ou inferior a 7,5 kW, e que se enquadre na modalidade autoconsumo local, conforme definido no inciso I-B do art. 2º (conforme Trecho 4).
+
+A definição mais recente do termo ""microgeração distribuída"" está no Trecho 4, que foi incluído pela REN ANEEL 1.098, de 23.07.2024.",5,16451,"[{""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8111}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.7566}, {""numero"": ""956"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.752}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.7014}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.7}]",,,
+MG-02,microgeracao,hibrida,resposta_encontrada,facil,Qual é o limite de potência para minigeração distribuída?,"Conforme Trecho 3 e Trecho 4 da Resolução Normativa n 1000/2021, o limite de potência para minigeração distribuída é estabelecido como a potência disponibilizada para a unidade consumidora onde a geração será conectada. Além disso, o § 2º do Art. 31 da mesma resolução estabelece que, para empreendimentos de múltiplas unidades consumidoras, o limite deve considerar a potência disponibilizada pela distribuidora para o atendimento do empreendimento.
+
+Não há um valor específico de potência máximo estabelecido nos trechos fornecidos. Portanto, o limite de potência para minigeração distribuída é determinado pela potência disponibilizada para a unidade consumidora ou empreendimento, conforme estabelecido na Resolução Normativa n 1000/2021.",5,5001,"[{""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8915}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8746}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8593}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.859}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.7835}]",,,
+MG-03,microgeracao,semantica,resposta_encontrada,facil,Quais fontes de energia são permitidas para microgeração distribuída?,"Conforme os trechos fornecidos, as fontes de energia permitidas para microgeração distribuída são:
+
+- Fontes renováveis de energia elétrica (conforme Trecho 1 e Trecho 2 da Resolução Normativa nº 956/2021);
+- Cogeração qualificada (conforme Trecho 1 da Resolução Normativa nº 956/2021 e Trecho 2 da Resolução Normativa nº 956/2021, que menciona a regulamentação da ANEEL).
+
+Além disso, o Trecho 3 e o Trecho 4 da Resolução Normativa nº 1000/2021 mencionam a fonte solar, estabelecendo um fator de capacidade para essa fonte em 16%. No entanto, isso não exclui as outras fontes renováveis ou a cogeração qualificada, apenas fornece um parâmetro específico para a fonte solar.
+
+Essas informações são baseadas nos seguintes atos normativos:
+- Resolução Normativa nº 956/2021;
+- Resolução Normativa nº 1000/2021;
+- Resolução Normativa nº 1.031, de 26 de julho de 2022 (mencionada no Trecho 1);
+- Resolução Normativa nº 1.059, de 07.02.2023 (mencionada nos Trechos 3, 4 e 5).",5,4920,"[{""numero"": ""956"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.9035}, {""numero"": ""956"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8566}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8495}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8335}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8209}]",,,
+MG-04,microgeracao,semantica,resposta_encontrada,medio,Como funciona o sistema de compensação de energia elétrica para prosumidores?,"Conforme os trechos fornecidos, o sistema de compensação de energia elétrica para prosumidores funciona da seguinte forma:
+
+- A energia elétrica ativa é injetada por unidade consumidora com microgeração ou minigeração distribuída na rede da distribuidora local (conforme Trecho 1, Trecho 2, Trecho 3 e Trecho 4).
+- A energia injetada é cedida a título de empréstimo gratuito à distribuidora local (conforme Trecho 1, Trecho 2, Trecho 3 e Trecho 4).
+- Posteriormente, a energia injetada é utilizada para compensar o consumo de energia elétrica ativa ou contabilizada como crédito de energia de unidades consumidoras participantes do sistema (conforme Trecho 1, Trecho 2, Trecho 3 e Trecho 4).
+
+Essas informações estão presentes nos seguintes atos normativos:
+- Resolução Normativa n 1000/2021 (Trecho 1 e Trecho 3)
+- Resolução Normativa n 956/2021 (Trecho 2)
+- Aviso de Consulta Pública (Trecho 4)
+
+Não há menção a esse tema no Trecho 5.",5,5688,"[{""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8138}, {""numero"": ""956"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8032}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.7966}, {""numero"": """", ""tipo"": ""Aviso de Consulta Pública"", ""ano"": """", ""score"": 0.7571}, {""numero"": ""2901"", ""tipo"": ""Resolução Homologatória"", ""ano"": ""2021"", ""score"": 0.742}]",,,
+MG-05,microgeracao,hibrida,parcial,medio,Quais são os prazos para a distribuidora conectar uma unidade de microgeração à rede?,"Conforme os trechos fornecidos, os prazos para a distribuidora conectar uma unidade de microgeração à rede são estabelecidos no Art. 64 da Resolução Normativa n 1000/2021, que determina os seguintes prazos:
+
+- 15 dias: para conexão de unidades consumidoras com microgeração distribuída ou sem geração, em tensão menor do que 69kV, em que não haja necessidade de realização de obras no sistema de distribuição ou de transmissão, apenas, quando necessário, a instalação do ramal de conexão;
+- 30 dias: para conexão de unidades consumidoras com microgeração distribuída ou sem geração, em tensão menor do que 69kV, em que haja necessidade de realização de obras no sistema de distribuição ou de transmissão;
+- 45 dias: para as demais conexões.
+
+Além disso, o Art. 655-A da mesma resolução, incluído pela REN ANEEL 1.059, de 07.02.2023, estabelece que a distribuidora deve atender à solicitação de conexão ou de aumento de potência disponibilizada de unidade consumidora com microgeração ou minigeração distribuída, de acordo com os procedimentos, prazos e condições estabelecidos no Capítulo II do Título I e do Módulo 3 do PRODIST.
+
+Conforme § 3º e § 4º da Resolução Normativa n 1000/2021, a distribuidora deve comunicar previamente ao consumidor e demais usuários caso suspenda os prazos dispostos neste artigo, e o prazo deve voltar a ser contado imediatamente após cessado o motivo da suspensão.
+
+Essas informações são encontradas nos trechos 1, 2, 3, 4 e 5, que se referem à Resolução Normativa n 1000/2021.",5,7831,"[{""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.9082}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.9081}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.9053}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.905}, {""numero"": ""1000"", ""tipo"": ""Resolução Normativa"", ""ano"": ""2021"", ""score"": 0.8298}]",,,

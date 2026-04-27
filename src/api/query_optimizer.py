@@ -3,10 +3,13 @@ query_optimizer.py — otimizacao de queries com historico, deteccao de contexto
 """
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
-from groq import Groq
+from dotenv import load_dotenv
+
+load_dotenv()
 
 log = logging.getLogger(__name__)
 
@@ -54,8 +57,19 @@ PROMPT_SISTEMA = (
     "Para tabelas adicione valor/percentual/tabela. Substitua pronomes pelos docs referenciados.\n"
     "- hyde_texto: texto tecnico como trecho real da ANEEL respondendo a pergunta.\n"
     "- sub_queries: max 3, so quando cruzar multiplos docs.\n"
-    "- Tipos: resumo=explicacao, comparacao=revogacao/alteracao, tabela=valores/tarifas, "
-    "especifica=artigo/inciso, busca=tema geral."
+    "- Tipos: resumo=explicacao completa, "
+    "comparacao=revogacao/alteracao entre atos, "
+    "comparacao_temporal=evolucao do tema entre anos (2+ anos na query), "
+    "comparacao_referencia=quais atos citam um documento especifico, "
+    "tabela=valores/tarifas/percentuais, "
+    "especifica=artigo/inciso especifico, "
+    "definicao=o que significa um termo tecnico, "
+    "procedimento=como fazer/solicitar/obter algo, "
+    "vigencia=se ato esta em vigor ou foi revogado, "
+    "autoria=atos de um autor/relator especifico, "
+    "agregacao=contagem/ranking/listagem de muitos atos (use analytics), "
+    "hibrida_complexa=pergunta que cruza multiplos tipos (multi-step na P3), "
+    "busca=tema geral sem tipo especifico."
 )
 
 PROMPT_MESCLAR = (
@@ -126,6 +140,48 @@ def _validar_filtros(raw):
     return filtros
 
 
+def _criar_cliente_optimizer():
+    """
+    Cria cliente OpenAI-compatível para o optimizer.
+    Tenta Qwen primeiro, usa Groq como fallback.
+    Retorna (client, modelo).
+    """
+    qwen_key = os.getenv("QWEN_API_KEY", "").strip()
+    groq_key  = os.getenv("GROQ_API_KEY",  "").strip()
+
+    if qwen_key and qwen_key != "cole_sua_chave_aqui":
+        import openai
+        base_url = os.getenv("QWEN_BASE_URL",
+                             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+        client = openai.OpenAI(api_key=qwen_key, base_url=base_url)
+        modelo = os.getenv("LLM_MODEL", "qwen3-30b-a3b")
+        log.info("Optimizer usando Qwen: %s", modelo)
+        return client, modelo
+
+    if groq_key:
+        from groq import Groq
+        client = Groq(api_key=groq_key)
+        modelo = os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")
+        log.info("Optimizer usando Groq (fallback): %s", modelo)
+        return client, modelo
+
+    raise EnvironmentError(
+        "Nenhuma API key configurada. Adicione QWEN_API_KEY ou GROQ_API_KEY no .env"
+    )
+
+
+_optimizer_client = None
+_optimizer_modelo  = None
+
+
+def _get_optimizer_client():
+    global _optimizer_client, _optimizer_modelo
+    if _optimizer_client is None:
+        _optimizer_client, _optimizer_modelo = _criar_cliente_optimizer()
+    return _optimizer_client, _optimizer_modelo
+
+
+
 def _gerar_query_mesclada(pergunta, historico, client, modelo):
     """
     Gera query mesclando contexto das respostas anteriores com a pergunta atual.
@@ -156,21 +212,14 @@ def _gerar_query_mesclada(pergunta, historico, client, modelo):
     return None
 
 
-def otimizar_query(pergunta, client, modelo="llama-3.3-70b-versatile",
+def otimizar_query(pergunta, client=None, modelo=None,
                    historico=None, n_esclarecimentos=0):
     """
-    Otimiza a query usando LLM com suporte a:
-      - Historico de conversa (resolve referencias como esse despacho)
-      - Deteccao de mudanca de contexto (descarta historico irrelevante)
-      - Esclarecimento dinamico e especifico (max 3 tentativas)
-      - Mesclagem de respostas anteriores do mesmo contexto
-
-    Parametros:
-      pergunta          — pergunta do usuario
-      client            — cliente Groq
-      historico         — lista [{"pergunta": ..., "resposta": ...}]
-      n_esclarecimentos — quantas vezes ja pediu esclarecimento neste contexto
+    Otimiza a query usando LLM.
+    Se client/modelo nao forem passados, usa o cliente configurado automaticamente.
     """
+    if client is None or modelo is None:
+        client, modelo = _get_optimizer_client()
     inicio = time.monotonic()
     hist_str = _formatar_historico(historico)
     conteudo = (hist_str + "\n\nPergunta atual: " + pergunta) if hist_str else ("Pergunta: " + pergunta)

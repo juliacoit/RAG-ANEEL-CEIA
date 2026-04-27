@@ -92,10 +92,11 @@ Instalar no caminho padrão: `C:\Program Files\7-Zip\`
 
 ### 1.6 Chaves de API
 
-| Chave | Onde obter | Custo |
+| Chave | Onde obter | Uso |
 |---|---|---|
-| `GROQ_API_KEY` | https://console.groq.com | Gratuito (sem cartão) |
-| `DEEPSEEK_API_KEY` | https://platform.deepseek.com | Pago (~$0.05/100 perguntas) — **opcional**, usado só como fallback |
+| `QWEN_API_KEY` | https://dashscope.console.aliyun.com/apiKey | **Obrigatório** — LLM principal (Qwen3-30B-A3B) |
+| `GROQ_API_KEY` | https://console.groq.com | Gratuito (sem cartão) — fallback automático |
+| `GEMINI_API_KEY` | https://aistudio.google.com | Gratuito — fallback opcional (segundo nível) |
 
 ---
 
@@ -127,16 +128,29 @@ cp env.example .env
 Editar o `.env` e preencher as chaves:
 
 ```env
-GROQ_API_KEY=gsk_...              # obrigatório
-DEEPSEEK_API_KEY=sk-...           # opcional (fallback automático)
-LLM_PROVIDER=groq
-LLM_MODEL=llama-3.3-70b-versatile
-DEEPSEEK_MODEL=deepseek-reasoner
+# LLM principal
+LLM_PROVIDER=qwen
+LLM_MODEL=qwen3-30b-a3b
+QWEN_API_KEY=sk-...                   # obrigatório
+QWEN_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+
+# Fallback 1 (gratuito)
+GROQ_API_KEY=gsk_...                  # recomendado
+GROQ_MODEL=llama-3.3-70b-versatile
+
+# Fallback 2 (opcional)
+GEMINI_API_KEY=                       # deixe vazio se não quiser usar
+GEMINI_MODEL=gemini-2.0-flash
+
+# Qdrant
 QDRANT_URL=http://localhost:6333
 QDRANT_COLLECTION=aneel_chunks
 TOP_K_RETRIEVAL=10
 OPTIMIZER_TIMEOUT=12
 ```
+
+> **Cadeia de fallback automático:**  
+> `Qwen3-30B` → `Groq / Llama-3.3-70B` → `Gemini Flash` → mensagem de erro clara
 
 Subir o Qdrant:
 
@@ -331,23 +345,35 @@ print('Busca OK:', r[0]['titulo'] if r else 'sem resultado')
 
 ## 9. Avaliação RAGAS
 
-O sistema inclui um banco de 45 perguntas em 10 categorias temáticas para avaliação com métricas RAGAS.
+O sistema inclui um banco de 45 perguntas em 10 categorias temáticas para avaliação automática com métricas RAGAS.
 
 ```bash
-# Rodar avaliação completa
-python tests/banco_perguntas.py
+# Instalar dependências de avaliação (apenas na primeira vez)
+pip install "ragas>=0.2" langchain-groq langchain-openai langchain-community
 
-# Opções
-python tests/banco_perguntas.py --limite 10
-python tests/banco_perguntas.py --categoria microgeracao
-python tests/banco_perguntas.py --tipo semantica
-python tests/banco_perguntas.py --saida resultados.json
+# Avaliar 5 perguntas (rápido, para testar)
+python eval_ragas.py --limite 5 --verbose
+
+# Avaliar por categoria
+python eval_ragas.py --categoria microgeracao
+python eval_ragas.py --categoria tarifas
+
+# Avaliar apenas perguntas que devem recusar
+python eval_ragas.py --tipo fallback
+
+# Avaliação completa (todas as 45 perguntas)
+python eval_ragas.py
+
+# Salvar resultado em arquivo específico
+python eval_ragas.py --saida docs/resultado_v1.csv
 ```
 
 Métricas avaliadas:
 - **Faithfulness** — a resposta é fiel aos chunks recuperados?
 - **Response Relevancy** — a resposta resolve a dúvida?
 - **Context Precision** — os chunks recuperados são relevantes?
+
+O resultado é salvo automaticamente em `docs/ragas_resultado_<timestamp>.csv`.
 
 ---
 
@@ -414,13 +440,13 @@ chunks_*.parquet
        ↓  unir_parquets.py
 chunks_completo_unificado.parquet  (562.152 chunks · 111 MB)
        ↓  p2_indexar.py
-Qdrant  (vetorial: MiniLM-L12 384 dims ou BGE-M3 1024 dims)
+Qdrant  (vetorial: BGE-M3 1024 dims)
 BM25    (índice esparso: rank-bm25 sobre 562k docs)
        ↓
 API FastAPI  (src/api/main.py — porta 8000)
   ├── query_optimizer.py  →  rewriting · HyDE · decomposição · memória (6 turnos)
-  ├── busca híbrida        →  0.6 × semântico + 0.4 × BM25
-  └── llm_chain.py        →  Groq llama-3.3-70b (fallback: DeepSeek R1)
+  ├── busca híbrida        →  0.7 × semântico + 0.3 × BM25
+  └── llm_chain.py        →  Qwen3-30B (fallback: Groq Llama-3.3-70B → Gemini Flash)
        ↓
 Streamlit  (app.py — porta 8501)
 ```
@@ -447,10 +473,11 @@ Para gerar o índice BGE-M3, rodar `p2_indexar.py` em uma máquina com GPU (ex: 
 |---|---|
 | Linguagem | Python 3.11 / 3.12 |
 | Vector Store | Qdrant (Docker local, porta 6333) |
-| Embeddings | MiniLM-L12-v2 384 dims (local) / BGE-M3 1024 dims (opcional) |
+| Embeddings | BGE-M3 1024 dims (padrão) / MiniLM-L12-v2 384 dims (fallback local) |
 | Busca esparsa | BM25Okapi (`rank-bm25`) |
-| LLM principal | Groq — `llama-3.3-70b-versatile` (gratuito, 100k tokens/dia) |
-| LLM fallback | DeepSeek R1 — `deepseek-reasoner` (ativado em rate limit) |
+| LLM principal | Qwen — `qwen3-30b-a3b` via Dashscope (API OpenAI-compatible) |
+| LLM fallback 1 | Groq — `llama-3.3-70b-versatile` (gratuito, 100k tokens/dia) |
+| LLM fallback 2 | Gemini Flash — `gemini-2.0-flash` (opcional, gratuito) |
 | Download | `curl_cffi` (impersona TLS Chrome 124 — contorna Cloudflare) |
 | Parser PDF | PyMuPDF + pdfplumber + Tesseract OCR |
 | Parser HTML | BeautifulSoup4 |
@@ -465,6 +492,6 @@ Para gerar o índice BGE-M3, rodar `p2_indexar.py` em uma máquina com GPU (ex: 
 
 1. **Anos disponíveis:** apenas 2016, 2021 e 2022. Atos de outros anos não estão na base.
 2. **Cloudflare:** ~25.202 de ~27k arquivos foram baixados. Documentos ausentes são retornados via fallback "modo menção" — o sistema cita atos que *mencionam* o documento não disponível.
-3. **Rate limit Groq:** plano gratuito — ~100k tokens/dia (~60–70 perguntas complexas/dia). Excedido, o sistema faz fallback automático para DeepSeek R1.
+3. **Rate limit Groq:** plano gratuito — ~100k tokens/dia. É usado apenas como fallback quando o Qwen falha, por isso o consumo é muito baixo no uso normal.
 4. **Perguntas sobre artigos específicos:** requerem os PDFs completos. Perguntas sobre o tema e escopo dos atos ("do que trata tal resolução") são respondidas com alta precisão.
 5. **Parquets não versionados:** `chunks_pdf_completo.parquet` e `chunks_completo_unificado.parquet` não estão no repositório (111 MB). Necessário rodar o pipeline ou solicitá-los à equipe da P1.

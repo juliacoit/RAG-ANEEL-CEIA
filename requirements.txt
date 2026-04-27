@@ -19,7 +19,6 @@ pdfplumber>=0.10.0            # extração de tabelas com estrutura
 # ── Extração de outros formatos (P1) ──────────────────
 beautifulsoup4>=4.12.0        # parsing de HTMLs das Resoluções Normativas
 openpyxl>=3.1.0               # leitura de planilhas XLSX/XLSM
-rarfile>=4.1                  # extração de arquivos RAR (requer 7-Zip instalado)
 
 # ── Embeddings locais (P2) ─────────────────────────────
 sentence-transformers>=3.0.0  # paraphrase-multilingual-MiniLM-L12-v2
@@ -33,7 +32,6 @@ rank-bm25>=0.2.2
 
 # ── LLM — geração de respostas (P3) ───────────────────
 groq>=0.9.0                   # Groq — Llama 3.3 70B (gratuito, console.groq.com)
-openai>=1.40.0                # DeepSeek R1 via API OpenAI-compatível (fallback do Groq)
 
 # ── API (P3) ───────────────────────────────────────────
 fastapi>=0.111.0
@@ -48,8 +46,8 @@ python-dotenv>=1.0.0          # carrega .env com as API keys
 tqdm>=4.66.0                  # barras de progresso
 
 # ── Notas de instalação ────────────────────────────────
-# RAR: requer 7-Zip instalado em C:\Program Files\7-Zip\7z.exe
-#   Download: https://www.7-zip.org/
+# RAR/ZIP/7z: coloque 7z.exe (Windows) ou 7z (Linux) na raiz do projeto
+#   Download: https://www.7-zip.org/ (redistribuível gratuitamente)
 #
 # Qdrant: requer Docker rodando
 #   docker compose up -d
@@ -63,7 +61,4 @@ tqdm>=4.66.0                  # barras de progresso
 # DeepSeek R1: chave em platform.deepseek.com (pago, ~$0.55/M tokens input)
 #   Fallback automático quando Groq retornar 429 (rate limit)
 #   Adicionar no .env: DEEPSEEK_API_KEY=sua_chave
-#
-# REMOVIDAS (não importadas em nenhum arquivo de código):
-#   aiohttp, aiofiles  → eram do download async, substituído por curl_cffi
-#   websockets         → não é importado diretamente; uvicorn não exige pinagem
+

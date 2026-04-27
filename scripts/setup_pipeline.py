@@ -209,6 +209,19 @@ def rodar_download(categorias: list, limite: int = None) -> bool:
     salvar_falhas(falhas)
 
     log.info(f"  Baixados: {resultados.get('ok', 0)} | Erros: {len(falhas)}")
+
+    # Segunda rodada — baixa PDFs referenciados nos HTMLs (inclui 2015)
+    # O baixar_pdfs_aneel.py segue links dentro dos HTMLs e encontra
+    # documentos de anos não cobertos pelo JSON (ex: 2015)
+    log.info("  Verificando PDFs referenciados nos HTMLs...")
+    try:
+        from baixar_pdfs_aneel import baixar_referenciados_html
+        baixar_referenciados_html()
+    except (ImportError, AttributeError):
+        # Função não disponível — rodar manualmente se necessário:
+        # python src\p1_ingestion\baixar_pdfs_aneel.py
+        log.info("  Para baixar referenciados: python src/p1_ingestion/baixar_pdfs_aneel.py")
+
     return True
 
 
@@ -286,7 +299,7 @@ def rodar_parser(limite: int = None, usar_ocr: bool = True, workers: int = 16) -
         from concurrent.futures import ProcessPoolExecutor, as_completed
     except ImportError as e:
         log.error(f"Erro ao importar parser: {e}")
-        log.error("Instale: pip install pymupdf pdfplumber pdf2image pytesseract")
+        log.error("Instale: pip install pymupdf pdfplumber")
         return False
 
     try:
@@ -299,7 +312,7 @@ def rodar_parser(limite: int = None, usar_ocr: bool = True, workers: int = 16) -
     log.info(f"  {len(tarefas)} arquivos para processar")
 
     worker_args = [
-        (str(cam), meta, 800, 120, usar_ocr)
+        (str(cam), meta, 800, 120)
         for cam, meta in tarefas
     ]
 

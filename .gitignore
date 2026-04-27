@@ -22,6 +22,9 @@ data/logs/
 *.parquet
 # Índices binários (ex: bge_index.bin gerado no Colab)
 *.bin
+# Embeddings pesados gerados no Colab/GPU (ex: embeddings_bge_m3.npy)
+index_manual/
+*.npy
 
 # ── Banco de dados local (gerado por p2_indexar.py)
 db/
@@ -109,3 +112,6 @@ coverage.xml
 
 # ── Claude settings locais
 .claude/
+
+# ── Resultados de avaliação RAGAS (gerados automaticamente)
+docs/*.csv
