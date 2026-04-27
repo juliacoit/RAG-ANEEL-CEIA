@@ -19,25 +19,25 @@ Pré-requisitos:
 
 Uso:
   # Setup completo (primeira vez):
-  python scripts/setup_pipeline.py
+  python setup_pipeline.py
 
   # Só download de PDFs:
-  python scripts/setup_pipeline.py --apenas-download
+  python setup_pipeline.py --apenas-download
 
   # Só parser (PDFs já baixados):
-  python scripts/setup_pipeline.py --apenas-parser
+  python setup_pipeline.py --apenas-parser
 
   # Só P2 (parquets já gerados):
-  python scripts/setup_pipeline.py --apenas-p2
+  python setup_pipeline.py --apenas-p2
 
   # Reindexar do zero:
-  python scripts/setup_pipeline.py --apenas-p2 --resetar
+  python setup_pipeline.py --apenas-p2 --resetar
 
   # Modo teste rápido:
-  python scripts/setup_pipeline.py --limite 50 --testar
+  python setup_pipeline.py --limite 50 --testar
 
   # Sem OCR (mais rápido):
-  python scripts/setup_pipeline.py --sem-ocr
+  python setup_pipeline.py --sem-ocr
 """
 
 import argparse
@@ -53,7 +53,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-RAIZ = Path(__file__).resolve().parent.parent
+RAIZ = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
 # Caminhos
