@@ -10,12 +10,9 @@ Sistema RAG (Retrieval-Augmented Generation) que permite consultas em linguagem 
 
 ### Status das Fases
 
-- **Fase 1 (Ingestão) — :** Os chunks estão prontos em `data/processed/chunks_json_todos.parquet` (16.167 chunks, 15.528 atos, anos 2016/2021/2022). A fonte dos chunks são as **ementas** do JSON de metadados — Download dos PDFS em andamento. Ver `docs/RELATORIO_FASE_1.md`.
-- **Fase 2 (Indexação/Retrieval) — em andamento**: Indexação no Qdrant concluído, porém apenas com as ementas, os pdfs ainda nao foram implementados.
-- **Fase 3 (API/LLM) — em andamento**: API rodando e modelo respondendo, porém não tem contexto suficiente devido a falta dos PDFs baixados.
-
-### Limitação conhecida
-O sistema responde bem a perguntas sobre o tema e escopo dos atos ("do que trata tal resolução", "quais atos falam sobre PCH"). Perguntas sobre artigos ou incisos específicos não são respondíveis com a base atual — requerem os PDFs completos, que precisam ser obtidos por outro meio (ex: acesso direto, scraping manual, fonte alternativa).
+- **Fase 1 (Ingestão) — concluída**: 562.152 chunks em `data/processed/chunks_completo_unificado.parquet`. Fontes: PDFs, HTMLs e XLSXs de 25.202 arquivos baixados (anos 2016, 2021, 2022) via `curl_cffi` (contorna Cloudflare). Ementas em `chunks_json_todos.parquet` (16.167 chunks).
+- **Fase 2 (Indexação/Retrieval) — concluída**: 562.152 vetores indexados no Qdrant com BGE-M3 (1024 dims) + índice BM25 em `db/bm25/`. Busca híbrida com pesos dinâmicos por tipo de query.
+- **Fase 3 (API/LLM) — concluída**: API FastAPI rodando, LLM principal Qwen3-30B-A3B com cadeia de fallback automático (Groq → Gemini). Interface Streamlit, avaliação RAGAS com 45 perguntas.
 
 ---
 
@@ -23,15 +20,20 @@ O sistema responde bem a perguntas sobre o tema e escopo dos atos ("do que trata
 
 | Camada | Tecnologia |
 |---|---|
-| Linguagem | Python 3.10+ |
-| Orquestração | LangChain |
-| Vector Store | Qdrant (busca híbrida: vetorial + BM25) |
-| Embeddings | OpenAI `text-embedding-3-small` (1536 dims) |
-| LLMs | Llama 3.3 70b versatile (`llama-3.3-70b-versatile`) / GPT-4o |
+| Linguagem | Python 3.11 / 3.12 |
+| Vector Store | Qdrant (Docker local, porta 6333) |
+| Embeddings | `BAAI/bge-m3` (1024 dims, padrão) / `MiniLM-L12-v2` (384 dims, fallback local) |
+| Busca esparsa | BM25Okapi (`rank-bm25`) |
+| LLM principal | Qwen3-30B-A3B via Dashscope (API OpenAI-compatível) |
+| LLM fallback 1 | Groq — `llama-3.3-70b-versatile` (gratuito, 100k tokens/dia) |
+| LLM fallback 2 | Gemini Flash — `gemini-2.0-flash` (opcional) |
 | API | FastAPI + Uvicorn |
+| Interface | Streamlit |
 | Serialização | Parquet (via pandas + pyarrow) |
-| Download | aiohttp + asyncio |
-| Extração PDF | PyMuPDF (fitz) |
+| Download | `curl_cffi` (impersona TLS Chrome 124 — contorna Cloudflare) |
+| Extração PDF | PyMuPDF (fitz) + pdfplumber + Tesseract OCR |
+| Extração HTML | BeautifulSoup4 |
+| Extração XLSX | openpyxl |
 
 ---
 
@@ -40,35 +42,48 @@ O sistema responde bem a perguntas sobre o tema e escopo dos atos ("do que trata
 ```
 RAG-ANEEL-CEIA/
 ├── data/
-│   ├── raw/                         # JSON de metadados original
-│   ├── processed/                   # Chunks em .parquet (não versionados)
-│   │   └── chunks_json_todos.parquet   # 16.167 chunks prontos para indexação
-│   ├── aneel_limpo_completo.json    # Metadados limpos (todos os atos)
-│   ├── aneel_vigentes_completo.json
-│   └── samples/                     # Amostra de 50–200 chunks para testes rápidos
+│   ├── raw/                              # JSONs brutos da ANEEL (versionar)
+│   ├── aneel_limpo_completo.json         # todos os atos limpos
+│   ├── aneel_vigentes_completo.json      # apenas atos vigentes
+│   └── processed/                        # Parquets (não versionados)
+│       ├── chunks_json_todos.parquet        # 16.167 chunks de ementas
+│       ├── chunks_pdf_completo.parquet      # chunks de PDFs/HTML/XLSX
+│       └── chunks_completo_unificado.parquet  # 562k chunks unificados (111MB)
+├── db/
+│   └── bm25/
+│       ├── bm25_index.pkl               # índice BM25 gerado pelo p2_indexar
+│       └── bm25_ids.pkl
+├── pdfs/                                # ~25.202 arquivos baixados (não versionar)
+├── 7-Zip/                               # binários 7-Zip para extração de RAR
+├── poppler/Library/bin/                 # Poppler local para OCR (não versionar)
+├── index_manual/                        # embeddings BGE-M3 pré-calculados (Colab)
+│   └── embeddings_bge_m3.npy            # se existir, p2_indexar usa BGE-M3
+├── scripts/
+│   └── setup_pipeline.py               # orquestrador do pipeline completo
 ├── src/
 │   ├── p1_ingestion/
-│   │   ├── limpar_json_aneel.py    # Limpeza e filtragem do JSON de metadados
-│   │   ├── chunker_json.py         # Geração de chunks a partir das ementas (principal)
-│   │   ├── baixar_pdfs_aneel.py    # Download de PDFs (bloqueado por Cloudflare — não usar)
-│   │   └── parser.py               # Extração de texto de PDFs (para uso futuro)
-│   ├── retrieval/
-│   │   ├── vector_db.py    # Conexão Qdrant, geração de embeddings, upsert
-│   │   └── hybrid_search.py # Busca híbrida vetorial + BM25 com RRF
+│   │   ├── limpar_json_aneel.py         # limpeza dos JSONs brutos
+│   │   ├── baixar_pdfs_aneel.py         # download via curl_cffi
+│   │   ├── chunker_json.py              # chunking das ementas
+│   │   ├── parser.py                    # extração multi-formato (PDF/HTML/XLSX)
+│   │   └── unir_parquets.py             # une ementas + PDFs num parquet unificado
+│   ├── p2_search/
+│   │   └── p2_indexar.py               # indexação Qdrant + BM25 + busca híbrida
 │   ├── api/
-│   │   ├── main.py         # FastAPI: endpoints, orquestração, rate limiting
-│   │   └── llm_chain.py    # Prompt engineering, chamada ao LLM, logging
-│   └── utils/              # Logger, helpers de Parquet, constantes, config .env
+│   │   ├── main.py                      # FastAPI: endpoints, cache LRU, paralelismo
+│   │   ├── query_optimizer.py           # rewriting, HyDE, decomposição, memória
+│   │   ├── llm_chain.py                 # geração com cadeia Qwen→Groq→Gemini
+│   │   └── analytics.py                 # perguntas analíticas via pandas (sem LLM)
+│   └── utils/
+│       └── logger_metrics.py            # logger + salvar_log para JSONL
 ├── tests/
-│   ├── test_parser.py
-│   ├── test_chunker.py
-│   ├── test_hybrid_search.py
-│   ├── test_llm_chain.py
-│   └── test_api.py
-├── docs/                   # ADRs, benchmarks, análises de custo
-├── requirements.txt        # Dependências fixadas com ==
-├── .env.example
-├── .gitignore
+│   └── banco_perguntas.py              # 45 perguntas categorizadas (importável)
+├── banco_perguntas.py                  # cópia na raiz (uso direto)
+├── eval_ragas.py                       # CLI de avaliação RAGAS
+├── app.py                              # interface Streamlit
+├── docker-compose.yml
+├── requirements.txt
+├── env.example
 └── README.md
 ```
 
@@ -77,26 +92,32 @@ RAG-ANEEL-CEIA/
 ## Pipeline de Execução
 
 ```
-JSON metadados (ementas, datas, tipos)
+JSONs brutos (data/raw/)
     │
     ▼
-limpar_json_aneel.py  →  data/aneel_limpo_completo.json
+limpar_json_aneel.py  →  data/aneel_vigentes_completo.json
     │
     ▼
-chunker_json.py  →  data/processed/chunks_json_todos.parquet
-                     (16.167 chunks · 15.528 atos · 2016/2021/2022)
+baixar_pdfs_aneel.py  →  pdfs/  (25.202 arquivos · curl_cffi · contorna Cloudflare)
     │
     ▼
-vector_db.py   →  Qdrant (vetores + BM25 indexados)
+chunker_json.py  →  chunks_json_todos.parquet   (ementas · 16k chunks)
+parser.py        →  chunks_pdf_completo.parquet  (PDFs/HTML/XLSX · 562k chunks)
+    │
+    ▼
+unir_parquets.py  →  chunks_completo_unificado.parquet  (111 MB)
+    │
+    ▼
+p2_indexar.py  →  Qdrant (BGE-M3 1024 dims) + BM25 (db/bm25/)
     │
     ▼ (produção)
-hybrid_search.py  ←  pergunta do usuário
+main.py (FastAPI)  ←  POST /query
+    ├── query_optimizer.py  →  rewriting · HyDE · filtros · memória
+    ├── busca híbrida       →  BM25 (0.70) + semântico (0.30), pesos por tipo
+    └── llm_chain.py        →  Qwen3-30B → Groq → Gemini
     │
     ▼
-llm_chain.py   →  resposta com citação
-    │
-    ▼
-main.py (FastAPI)  →  POST /query → JSON
+app.py (Streamlit)  →  interface com histórico e métricas
 ```
 
 ---
@@ -104,84 +125,100 @@ main.py (FastAPI)  →  POST /query → JSON
 ## Convenções de Código
 
 ### Geral
-- Python 3.10+; usar type hints em todas as funções públicas
+- Python 3.11/3.12; usar type hints em todas as funções públicas
 - Docstrings em português no estilo Google Docstrings
 - Variáveis e funções em `snake_case`; classes em `PascalCase`
-- Nunca hardcodar chaves de API, URLs ou parâmetros de configuração — usar sempre `.env` via `python-dotenv`
-- Constantes do projeto (chunk size, top-k, nome da collection) ficam em `src/utils/`
+- Nunca hardcodar chaves de API, URLs ou parâmetros — usar sempre `.env` via `python-dotenv`
+- `load_dotenv()` deve ser chamado **antes** de qualquer `os.getenv()` no topo do módulo
 
 ### Logs
-- Usar o logger configurado em `src/utils/` — nunca `print()` em código de produção
-- Logar sempre: início/fim de operações longas, erros com traceback, métricas de custo (tokens, latência)
+- Usar o logger configurado em `src/utils/logger_metrics.py` — nunca `print()` em produção
+- Logar sempre: início/fim de operações longas, erros com traceback, métricas de custo (tokens, latência, modelo usado)
+- Cada chamada ao LLM é salva via `salvar_log()` em `data/logs/logs.jsonl`
 
 ### Tratamento de Erros
-- Tratar explicitamente: erros de rede (timeout, 404), PDFs corrompidos/escaneados, falhas na API OpenAI/Anthropic
-- Usar retentativas com backoff exponencial em chamadas de API externas
+- Tratar explicitamente: erros de rede (timeout, 429), PDFs corrompidos/escaneados, falhas de API
+- Fallback em cascata no LLM: Qwen → Groq → Gemini → mensagem de erro clara, sem crash
 
 ### Dados e Arquivos
-- PDFs nunca entram no Git (`data/raw/*.pdf` está no `.gitignore`)
-- Parquets processados também não são versionados (`data/processed/`)
-- Somente o JSON de metadados original vai para o repositório
+- PDFs nunca entram no Git (`pdfs/` está no `.gitignore`)
+- Parquets processados não são versionados (`data/processed/`)
+- JSONs de metadados limpos (`data/aneel_*.json`) estão versionados
+- Embeddings BGE-M3 pré-calculados (`index_manual/*.npy`) não são versionados
 
 ---
 
 ## Módulos e Responsabilidades
 
 ### `src/p1_ingestion/limpar_json_aneel.py`
-- Lê o JSON de metadados bruto da ANEEL
+- Lê os JSONs brutos da ANEEL (3 arquivos: 2016, 2021, 2022)
 - Filtra e normaliza campos (datas, tipos de ato, URLs)
 - Gera `data/aneel_limpo_completo.json` e `data/aneel_vigentes_completo.json`
 
-### `src/p1_ingestion/chunker_json.py` — principal da Fase 1
-- Lê as ementas de `aneel_limpo_completo.json`
-- Gera chunks usando `RecursiveCharacterTextSplitter` do LangChain
-- Chunk size: `CHUNK_SIZE` (600 tokens), overlap: `CHUNK_OVERLAP` (90 tokens, ~15%)
-- Cada chunk carrega metadados: número do ato, tipo, data, URL
-- Output: `data/processed/chunks_json_todos.parquet` (16.167 chunks · 2,4 MB)
+### `src/p1_ingestion/baixar_pdfs_aneel.py`
+- Download de PDFs, HTMLs, XLSXs e RARs via `curl_cffi` (impersona TLS Chrome 124)
+- Contorna proteção Cloudflare do site da ANEEL
+- Download paralelo com workers configuráveis
+- Falhas registradas em log para reprocessamento
 
-### `src/p1_ingestion/baixar_pdfs_aneel.py` — NÃO USAR
-- Script de download dos PDFs completos
-- Bloqueado pelo Cloudflare do site da ANEEL (apenas 29 de ~17 mil baixaram)
-- Mantido no repo para referência/tentativas futuras
+### `src/p1_ingestion/chunker_json.py`
+- Lê as ementas de `aneel_vigentes_completo.json`
+- Gera chunks com `RecursiveCharacterTextSplitter` (600 tokens / 90 overlap)
+- Metadados por chunk: número do ato, tipo, data, URL
+- Output: `data/processed/chunks_json_todos.parquet`
 
-### `src/p1_ingestion/parser.py` — para uso futuro
-- Extração de texto de PDFs via PyMuPDF
-- Não utilizado na pipeline atual (depende dos PDFs completos)
+### `src/p1_ingestion/parser.py`
+- Extração de texto multi-formato: PDF (PyMuPDF + pdfplumber + OCR), HTML (BS4), XLSX (openpyxl)
+- Chunk size: 800 chars / 120 overlap para PDFs
+- Cabeçalho de coluna injetado em chunks de XLSX (crítico para LLM entender tabelas)
+- Processamento paralelo com `ProcessPoolExecutor`
 
-### `src/retrieval/vector_db.py`
-- Collection Qdrant: 1536 dimensões, distância cosseno, índice BM25
-- Geração de embeddings em batches (otimizar custo OpenAI)
-- Funções: verificar collection, contar pontos, apagar e reindexar
+### `src/p1_ingestion/unir_parquets.py`
+- Alinha colunas e concatena `chunks_json_todos.parquet` + `chunks_pdf_completo.parquet`
+- Output: `chunks_completo_unificado.parquet` (562k chunks · 111 MB)
 
-### `src/retrieval/hybrid_search.py`
-- Busca vetorial (semântica) + BM25 (lexical) em paralelo
-- Fusão com **Reciprocal Rank Fusion (RRF)** — não normalizar scores manualmente
-- Retornar Top-K chunks com scores e metadados completos
-- RRF é obrigatório: não substituir por média de scores
+### `src/p2_search/p2_indexar.py` — núcleo da Fase 2
+- Detecta automaticamente modelo de embedding: BGE-M3 (se `index_manual/embeddings_bge_m3.npy` existir) ou MiniLM-L12 (fallback local)
+- Indexa no Qdrant com distância cosseno
+- Cria e persiste índice BM25 em `db/bm25/`
+- **Pesos híbridos dinâmicos por tipo de query**: BM25 dominante (0.70) para buscas gerais; mais equilibrado (0.60/0.40) para procedimentos e queries híbridas complexas
+- Expansão de contexto: chunks vizinhos (±2)
+- Filtros automáticos: número e ano extraídos da query via regex
+- Fallback "modo menção": quando score < 0.5, busca sem filtros e marca `busca_fallback=True`
 
 ### `src/api/main.py`
-- Endpoint principal: `POST /query` (pergunta → resposta com citações)
-- Validação de entrada com **Pydantic**
-- Rate limiting para proteger custos de API
-- Health check: `GET /health`
-- Swagger automático em `/docs`
+- Endpoint `POST /query`: recebe pergunta + filtros, orquestra optimizer → busca → LLM
+- Cache LRU (100 entradas, TTL 5 min) para evitar chamadas repetidas
+- `ThreadPoolExecutor` para paralelismo (optimizer + embedding simultâneos)
+- Timeout de 12s no optimizer — fallback para query original se demorar
+- `GET /health` e `GET /docs` (Swagger automático)
+
+### `src/api/query_optimizer.py`
+- Chama o Groq para reescrever a query com vocabulário técnico ANEEL
+- Gera HyDE (trecho hipotético que simula um ato normativo real)
+- Decompõe perguntas compostas em sub-queries (max 3)
+- Resolve referências pronominais via histórico dos últimos 6 turnos
+- Detecta mudança de contexto e descarta histórico quando necessário
+- Esclarecimento progressivo: até 3 pedidos antes de buscar com o que tem
+- Roteamento analítico: queries de contagem/ranking vão para `analytics.py`, sem LLM
 
 ### `src/api/llm_chain.py`
-- Montar prompt: system prompt anti-alucinação + contexto (chunks) + pergunta
-- **Toda resposta deve citar**: número da Resolução/Portaria, artigo, inciso
-- Instrução de recusa obrigatória: se o contexto não contiver a resposta, retornar `"Não encontrado nos atos normativos consultados."` — nunca inferir
-- Logar cada chamada: pergunta, tokens, latência, modelo
+- Cadeia de fallback: Qwen3-30B-A3B → Groq llama-3.3-70b → Gemini Flash
+- 6 system prompts adaptativos: BUSCA · RESUMO · COMPARACAO · TABELA · ESPECIFICA · MENCAO
+- Seleção automática por palavras-chave na pergunta; MENCAO ativado por `busca_fallback=True`
+- Temperatura 0.1 (quasi-determinístico)
+- Log completo a cada chamada via `salvar_log()`: tokens, latência, modelo, faithfulness
 
-#### System Prompt Base (não alterar sem revisão da equipe)
-```
-Você é um especialista em regulação do setor elétrico brasileiro.
-Responda EXCLUSIVAMENTE com base nos trechos fornecidos abaixo.
-Toda afirmação deve citar o ato normativo de origem (ex: "conforme o Art. 3º
-da Resolução Normativa ANEEL nº 687/2016").
-Se a informação não constar nos documentos, responda:
-"Não encontrado nos atos normativos consultados."
-Nunca infira, suponha ou complete com conhecimento externo.
-```
+### `src/api/analytics.py`
+- Responde perguntas analíticas (contagem, ranking, agregação) diretamente via pandas
+- Não chama LLM — lê o parquet de metadados
+- Detectado automaticamente pelo `query_optimizer` antes de acionar a busca vetorial
+
+### `eval_ragas.py` e `banco_perguntas.py`
+- 45 perguntas em 10 categorias temáticas (microgeração, tarifas, PCH, concessões, etc.)
+- CLI: `python eval_ragas.py --limite N --categoria X --tipo Y --saida arquivo.csv`
+- Métricas RAGAS: Faithfulness, Response Relevancy, Context Precision
+- Avaliador: Groq (sem custo extra)
 
 ---
 
@@ -190,24 +227,28 @@ Nunca infira, suponha ou complete com conhecimento externo.
 Sempre ler do `.env` via `python-dotenv`. Nunca commitar o `.env` real.
 
 ```env
-OPENAI_API_KEY=sk-...
-GROQ_API_KEY=sk-ant-...
+# LLM principal
+LLM_PROVIDER=qwen
+LLM_MODEL=qwen3-30b-a3b
+QWEN_API_KEY=sk-...
+QWEN_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+
+# Fallback 1 (gratuito)
+GROQ_API_KEY=gsk_...
+GROQ_MODEL=llama-3.3-70b-versatile
+
+# Fallback 2 (opcional)
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.0-flash
+
+# Qdrant
 QDRANT_URL=http://localhost:6333
-QDRANT_API_KEY=
-CHUNK_SIZE=600
-CHUNK_OVERLAP=90
-TOP_K_RETRIEVAL=5
-LLM_MODEL=llama-3.3-70b-versatile
+QDRANT_COLLECTION=aneel_chunks
+
+# Busca
+TOP_K_RETRIEVAL=10
+OPTIMIZER_TIMEOUT=12
 ```
-
----
-
-## Testes
-
-- Rodar testes antes de qualquer PR: `pytest tests/`
-- Usar `data/samples/` para testes de retrieval — nunca a base completa
-- `test_api.py` usa `TestClient` do FastAPI (sem servidor real)
-- Manter cobertura mínima nos módulos críticos: `parser.py`, `chunker.py`, `hybrid_search.py`, `llm_chain.py`
 
 ---
 
@@ -215,32 +256,38 @@ LLM_MODEL=llama-3.3-70b-versatile
 
 | Decisão | Escolha | Motivo |
 |---|---|---|
-| Vector Store | Qdrant | Suporte nativo a busca híbrida vetorial + BM25 |
-| Embeddings | `text-embedding-3-small` | Custo-benefício: qualidade suficiente a menor custo que `large` |
-| Fusão de rankings | RRF | Elimina necessidade de normalizar scores de origens diferentes |
-| Serialização | Parquet | Leitura colunar rápida, tipos nativos, compressão eficiente vs. CSV |
-| Download de PDFs | Bloqueado (Cloudflare) | Site da ANEEL bloqueia automação — plano B: ementas do JSON |
-| Fonte dos chunks | Ementas do JSON | PDFs inacessíveis via automação; ementas cobrem tema/escopo dos atos |
-| Anti-alucinação | Instrução de recusa explícita no prompt | Garante que o modelo não infere além do contexto |
+| Vector Store | Qdrant | Suporte a busca vetorial + BM25, Docker local, sem custo |
+| Embeddings | BGE-M3 (1024 dims) | Melhor qualidade semântica para PT-BR; gerado no Colab L4 (~25 min) |
+| Embedding fallback | MiniLM-L12 (384 dims) | Roda local sem GPU; ativado se `embeddings_bge_m3.npy` não existir |
+| Busca esparsa | BM25Okapi | Captura termos técnicos exatos (siglas, números de resolução) |
+| Fusão híbrida | Pesos dinâmicos por tipo | BM25 dominante (0.70) para buscas gerais; equilibrado para queries complexas |
+| LLM principal | Qwen3-30B-A3B | Boa qualidade, API OpenAI-compatível, custo baixo |
+| LLM fallback | Groq → Gemini | Gratuitos; ativados automaticamente em cascata |
+| Download de PDFs | `curl_cffi` | Impersona TLS Chrome 124 — contorna proteção Cloudflare da ANEEL |
+| Serialização | Parquet | Leitura colunar rápida, compressão eficiente |
+| Anti-alucinação | System prompt + temperatura 0.1 | Responde apenas com base nos chunks; recusa obrigatória quando ausente |
 
 ---
 
 ## O Que Nunca Fazer
 
 - ❌ Hardcodar chaves de API ou URLs no código
+- ❌ Chamar `os.getenv()` antes de `load_dotenv()` — variáveis serão `None`
 - ❌ Usar `print()` em vez do logger configurado
-- ❌ Commitar `.env`, PDFs ou Parquets processados
-- ❌ Substituir RRF por média simples de scores
+- ❌ Commitar `.env`, PDFs, Parquets processados ou embeddings `.npy`
+- ❌ Substituir pesos híbridos dinâmicos por valor fixo sem revisar os tipos de query
 - ❌ Deixar o LLM responder além do contexto recuperado (zero inferência externa)
-- ❌ Alterar o system prompt sem revisão da equipe
-- ❌ Processar a base completa em testes — usar sempre `data/samples/`
+- ❌ Alterar o system prompt base sem revisão da equipe
+- ❌ Processar a base completa em testes — usar `--limite N` no setup_pipeline
 
 ---
 
 ## Métricas de Avaliação (Benchmark)
 
-O sistema é avaliado por três métricas em `docs/`:
+O sistema é avaliado com 45 perguntas via `eval_ragas.py`:
 
 - **Faithfulness**: a resposta é fiel aos documentos recuperados?
-- **Answer Relevance**: a resposta resolve a dúvida do especialista?
-- **Citation Accuracy**: resoluções e datas citadas estão corretas?
+- **Response Relevancy**: a resposta resolve a dúvida?
+- **Context Precision**: os chunks recuperados são relevantes para a pergunta?
+
+Resultados salvos em `docs/ragas_resultado_<timestamp>.csv`.
