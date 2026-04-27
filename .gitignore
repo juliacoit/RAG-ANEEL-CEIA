@@ -1,42 +1,76 @@
-# ── Dados grandes — gerar localmente rodando o pipeline ──────────────
+# =============================================================================
+# RAG ANEEL — .gitignore
+# =============================================================================
+
+# ── Dados gerados pelo pipeline (gerar localmente rodando setup_pipeline.py)
+# JSONs gerados por limpar_json_aneel.py
 data/aneel_limpo_completo.json
 data/aneel_vigentes_completo.json
+# Qualquer outro JSON gerado na raiz de data/ (não confundir com data/raw/)
+data/*.json
 
-# Parquets gerados pelo pipeline P1 (grandes — gerar localmente)
-data/processed/chunks_pdf_completo.parquet
-data/processed/chunks_completo_unificado.parquet
-# chunks_json_todos.parquet é pequeno (2.4MB) — pode versionar se quiser
-# data/processed/chunks_json_todos.parquet
+# Todos os parquets e checkpoints gerados por parser.py / chunker_json.py
+data/processed/
 
-# ── Banco de dados local ───────────────────────────────────────────────
-db/             # Qdrant + BM25 — gerar rodando p2_indexar.py
+# Logs de runtime gerados pela API
+data/logs/
 
-# ── PDFs e arquivos baixados ───────────────────────────────────────────
-pdfs/           # ~27k arquivos — baixar rodando baixar_pdfs_aneel.py
+# ── Arquivos binários gerados (grandes e regeneráveis)
+# Índices BM25 (db/bm25/bm25_index.pkl, bm25_ids.pkl)
+*.pkl
+# Parquets de qualquer localização
+*.parquet
+# Índices binários (ex: bge_index.bin gerado no Colab)
+*.bin
 
-# ── Dependências externas (instalar manualmente — ver SETUP.md) ───────
-poppler/        # Poppler para Windows (OCR) — não instalar no sistema
+# ── Banco de dados local (gerado por p2_indexar.py)
+db/
 
-# ── Ambiente Python ────────────────────────────────────────────────────
+# ── PDFs e arquivos baixados da ANEEL (~27k arquivos)
+# Baixar rodando: python scripts/setup_pipeline.py
+pdfs/
+
+# ── Falhas e logs do download
+falhas_download.json
+falhas_playwright.json
+pdfs/downloads_referenciados.json
+
+# ── Scripts de debug e versões antigas na raiz (movidos para scripts/)
+debug_json.py
+setup_pipeline.py
+
+# ── Dependências externas (instalar manualmente — ver SETUP.md)
+# Poppler para Windows (OCR) — instalar dentro do projeto
+poppler/
+
+# ── Ambiente virtual Python
 venv/
 .venv/
 env/
+.env/
+
+# ── Cache Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 .Python
+*.so
+
+# ── Build e distribuição
 build/
 dist/
 *.egg-info/
 .eggs/
+*.egg
 
-# ── Variáveis de ambiente (NUNCA versionar) ────────────────────────────
+# ── Variáveis de ambiente — NUNCA versionar chaves de API
 .env
 .env.local
 .env.*.local
+.env.production
 
-# ── IDEs ───────────────────────────────────────────────────────────────
+# ── IDEs e editores
 .vscode/
 .idea/
 *.suo
@@ -44,8 +78,10 @@ dist/
 *.njsproj
 *.sln
 *.sw?
+*.sublime-project
+*.sublime-workspace
 
-# ── Sistema operacional ────────────────────────────────────────────────
+# ── Sistema operacional
 .DS_Store
 .DS_Store?
 ._*
@@ -53,18 +89,23 @@ dist/
 .Trashes
 ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# ── Logs e temporários ─────────────────────────────────────────────────
+# ── Logs e arquivos temporários
 *.log
 *.tmp
 *.bak
-falhas_download.json
-falhas_playwright.json
-pdfs/downloads_referenciados.json
+*.swp
 
-# ── Jupyter ────────────────────────────────────────────────────────────
+# ── Jupyter
 .ipynb_checkpoints/
 *.ipynb
 
-# ── Claude settings ────────────────────────────────────────────────────
+# ── Testes e cobertura
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# ── Claude settings locais
 .claude/
