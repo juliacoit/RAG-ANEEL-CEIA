@@ -23,7 +23,7 @@ data/logs/
 # Índices binários (ex: bge_index.bin gerado no Colab)
 *.bin
 # Embeddings pesados gerados no Colab/GPU (ex: embeddings_bge_m3.npy)
-index_manual/
+# index_manual/ — removido para permitir versionar a pasta e o README
 *.npy
 
 # ── Banco de dados local (gerado por p2_indexar.py)

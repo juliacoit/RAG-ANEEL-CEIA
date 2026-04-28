@@ -6,40 +6,53 @@ pandas>=2.0.0
 pyarrow>=14.0.0               # leitura/escrita de Parquet
 numpy>=1.26.0
 
-# ── Chunking (P1) ──────────────────────────────────────
+# ── Validação e tipagem ────────────────────────────────
+pydantic>=2.0.0               # validação de schemas (FastAPI, eval)
+
+# ── Chunking (ingestion) ───────────────────────────────
 langchain-text-splitters>=0.2.0
 
-# ── Download de PDFs (P1) ─────────────────────────────
+# ── Download de PDFs (ingestion) ──────────────────────
 curl_cffi>=0.6.0              # contorna Cloudflare (impersonate Chrome)
 
-# ── Parser de PDFs (P1) ───────────────────────────────
+# ── Parser de PDFs (ingestion) ────────────────────────
 pymupdf>=1.24.0               # extração de texto, tachado, imagens (fitz)
 pdfplumber>=0.10.0            # extração de tabelas com estrutura
 
-# ── Extração de outros formatos (P1) ──────────────────
+# ── Extração de outros formatos (ingestion) ───────────
 beautifulsoup4>=4.12.0        # parsing de HTMLs das Resoluções Normativas
 openpyxl>=3.1.0               # leitura de planilhas XLSX/XLSM
 
-# ── Embeddings locais (P2) ─────────────────────────────
+# ── Embeddings locais (search) ─────────────────────────
 sentence-transformers>=3.0.0  # paraphrase-multilingual-MiniLM-L12-v2
                                # baixa ~120MB na primeira execução
 
-# ── Vector Store (P2) ──────────────────────────────────
+# ── Vector Store (search) ──────────────────────────────
 qdrant-client>=1.9.0          # cliente Qdrant (requer Docker rodando)
 
-# ── Busca esparsa BM25 (P2) ───────────────────────────
+# ── Busca esparsa BM25 (search) ───────────────────────
 rank-bm25>=0.2.2
 
-# ── LLM — geração de respostas (P3) ───────────────────
-groq>=0.9.0                   # Groq — Llama 3.3 70B (gratuito, console.groq.com)
+# ── LLM — clientes e geração (api) ────────────────────
+openai>=1.0.0                 # cliente OpenAI-compatível (Qwen, Groq via base_url)
+groq>=0.9.0                   # Groq SDK — Llama 3.3 70B (gratuito, console.groq.com)
 
-# ── API (P3) ───────────────────────────────────────────
+# ── API (api) ──────────────────────────────────────────
 fastapi>=0.111.0
 uvicorn>=0.30.0
 
-# ── Interface gráfica (P3) ────────────────────────────
+# ── Interface gráfica ─────────────────────────────────
 streamlit>=1.35.0
 requests>=2.31.0              # chamadas HTTP do app.py para a API
+
+# ── Avaliação (evaluation) ────────────────────────────
+ragas>=0.2.0                  # métricas Faithfulness, ResponseRelevancy, ContextPrecision
+langchain-groq>=0.1.0         # wrapper LangChain para Groq (usado pelo RAGAS)
+langchain-openai>=0.1.0       # wrapper LangChain para OpenAI Embeddings (usado pelo RAGAS)
+
+# ── Testes ─────────────────────────────────────────────
+pytest>=7.0.0
+pytest-asyncio>=0.23.0        # suporte a testes assíncronos
 
 # ── Utilitários ────────────────────────────────────────
 python-dotenv>=1.0.0          # carrega .env com as API keys
@@ -58,7 +71,9 @@ tqdm>=4.66.0                  # barras de progresso
 # Groq: chave gratuita em console.groq.com (sem cartão de crédito)
 #   Adicionar no .env: GROQ_API_KEY=sua_chave
 #
-# DeepSeek R1: chave em platform.deepseek.com (pago, ~$0.55/M tokens input)
-#   Fallback automático quando Groq retornar 429 (rate limit)
-#   Adicionar no .env: DEEPSEEK_API_KEY=sua_chave
-
+# Qwen (primário): chave em dashscope.console.aliyun.com
+#   Adicionar no .env: QWEN_API_KEY=sua_chave
+#
+# OpenAI (eval embeddings): chave em platform.openai.com
+#   Adicionar no .env: OPENAI_API_KEY=sua_chave
+#   Usado apenas pelo RAGAS para ResponseRelevancy — sem chave usa embeddings locais
