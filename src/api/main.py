@@ -25,7 +25,7 @@ load_dotenv()
 RAIZ = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ))
 
-from src.p2_search.p2_indexar import buscar, carregar_indices, conectar_qdrant, NOME_COLECAO
+from src.search.indexar import buscar, carregar_indices, conectar_qdrant, NOME_COLECAO
 from src.api.llm_chain import gerar_resposta
 from src.api.query_optimizer import otimizar_query, QueryOtimizada
 from src.api.analytics import responder_analitico, is_pergunta_analitica

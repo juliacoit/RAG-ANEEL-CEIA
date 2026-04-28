@@ -4,18 +4,17 @@ setup_pipeline.py
 Script de setup completo do projeto RAG ANEEL.
 
 Executa em sequência:
-  1. P1a — Limpeza dos JSONs (limpar_json_aneel.py)
-  2. P1b — Download dos PDFs (baixar_pdfs_aneel.py)
-  3. P1c — Chunking das ementas (chunker_json.py)
-  4. P1d — Parser dos PDFs/HTML/XLSX (parser.py)
-  5. P1e — União dos parquets (unir_parquets.py)
-  6. P2  — Indexação Qdrant + BM25 (p2_indexar.py)
+  1. Fase 1a — Limpeza dos JSONs         (src/ingestion/limpar_json_aneel.py)
+  2. Fase 1b — Download dos PDFs         (src/ingestion/baixar_pdfs_aneel.py)
+  3. Fase 1c — Chunking das ementas      (src/ingestion/chunker_json.py)
+  4. Fase 1d — Parser dos PDFs/HTML/XLSX (src/ingestion/parser.py)
+  5. Fase 1e — União dos parquets        (src/ingestion/unir_parquets.py)
+  6. Fase 2  — Indexação Qdrant + BM25   (src/search/indexar.py)
 
 Pré-requisitos:
   - Docker rodando com Qdrant: docker compose up -d
   - pip install -r requirements.txt
   - Arquivos JSON brutos em data/raw/
-  - Poppler em poppler/Library/bin/ (para OCR)
 
 Uso:
   # Setup completo (primeira vez):
@@ -35,9 +34,6 @@ Uso:
 
   # Modo teste rápido:
   python setup_pipeline.py --limite 50 --testar
-
-  # Sem OCR (mais rápido):
-  python setup_pipeline.py --sem-ocr
 """
 
 import argparse
@@ -126,7 +122,7 @@ def rodar_limpeza(jsons: dict) -> bool:
         log.info(f"JSON limpo já existe — pulando.")
         return True
 
-    sys.path.insert(0, str(RAIZ / "src" / "p1_ingestion"))
+    sys.path.insert(0, str(RAIZ / "src" / "ingestion"))
     try:
         from limpar_json_aneel import processar, imprimir_resumo
     except ImportError as e:
@@ -192,7 +188,7 @@ def rodar_download(categorias: list, limite: int = None) -> bool:
             log.info("  Pulando download.")
             return True
 
-    sys.path.insert(0, str(RAIZ / "src" / "p1_ingestion"))
+    sys.path.insert(0, str(RAIZ / "src" / "ingestion"))
     try:
         from baixar_pdfs_aneel import coletar_downloads, baixar_todos, salvar_falhas
     except ImportError as e:
@@ -219,8 +215,8 @@ def rodar_download(categorias: list, limite: int = None) -> bool:
         baixar_referenciados_html()
     except (ImportError, AttributeError):
         # Função não disponível — rodar manualmente se necessário:
-        # python src\p1_ingestion\baixar_pdfs_aneel.py
-        log.info("  Para baixar referenciados: python src/p1_ingestion/baixar_pdfs_aneel.py")
+        # python src/ingestion/baixar_pdfs_aneel.py
+        log.info("  Para baixar referenciados: python src/ingestion/baixar_pdfs_aneel.py")
 
     return True
 
@@ -242,7 +238,7 @@ def rodar_chunking_ementas(limite: int = None) -> bool:
         log.error("JSON vigentes não encontrado.")
         return False
 
-    sys.path.insert(0, str(RAIZ / "src" / "p1_ingestion"))
+    sys.path.insert(0, str(RAIZ / "src" / "ingestion"))
     try:
         from chunker_json import gerar_chunks, salvar_parquet
     except ImportError as e:
@@ -277,7 +273,7 @@ def rodar_chunking_ementas(limite: int = None) -> bool:
 # FASE 1d — Parser dos PDFs/HTML/XLSX
 # ---------------------------------------------------------------------------
 
-def rodar_parser(limite: int = None, usar_ocr: bool = True, workers: int = 16) -> bool:
+def rodar_parser(limite: int = None, workers: int = 16) -> bool:
     log.info("=" * 55)
     log.info("FASE 1d — Parser PDFs/HTML/XLSX")
     log.info("=" * 55)
@@ -290,7 +286,7 @@ def rodar_parser(limite: int = None, usar_ocr: bool = True, workers: int = 16) -
         log.error("JSON vigentes não encontrado.")
         return False
 
-    sys.path.insert(0, str(RAIZ / "src" / "p1_ingestion"))
+    sys.path.insert(0, str(RAIZ / "src" / "ingestion"))
     try:
         from parser import (
             coletar_tarefas, worker, ParquetWriter,
@@ -364,7 +360,7 @@ def rodar_uniao() -> bool:
         log.error(f"Parquet de PDFs não encontrado: {PARQUET_PDFS}")
         return False
 
-    sys.path.insert(0, str(RAIZ / "src" / "p1_ingestion"))
+    sys.path.insert(0, str(RAIZ / "src" / "ingestion"))
     try:
         from unir_parquets import carregar, alinhar_colunas, unir
     except ImportError as e:
@@ -413,15 +409,15 @@ def rodar_p2(
             log.error("Nenhum parquet encontrado. Rode as fases anteriores primeiro.")
             return False
 
-    sys.path.insert(0, str(RAIZ / "src" / "p2_search"))
+    sys.path.insert(0, str(RAIZ / "src" / "search"))
     try:
-        from p2_indexar import (
+        from indexar import (
             conectar_qdrant, criar_colecao, gerar_embeddings,
             indexar_qdrant, criar_bm25, NOME_COLECAO,
         )
-        from p2_indexar import testar as testar_busca
+        from indexar import testar as testar_busca
     except ImportError as e:
-        log.error(f"Erro ao importar p2_indexar: {e}")
+        log.error(f"Erro ao importar indexar: {e}")
         return False
 
     import pandas as pd
@@ -442,8 +438,10 @@ def rodar_p2(
     criar_colecao(qclient, resetar=resetar)
 
     count = qclient.count(NOME_COLECAO).count
-    if count >= len(df) and not resetar:
-        log.info(f"  Qdrant já tem {count:,} pontos — pulando embeddings.")
+    # Aceita diferença de até 1% (indexação anterior pode ter tido falhas pontuais)
+    threshold = int(len(df) * 0.99)
+    if count >= threshold and not resetar:
+        log.info(f"  Qdrant já tem {count:,} pontos (threshold={threshold:,}) — pulando embeddings.")
     else:
         log.info(f"  Gerando embeddings...")
         embeddings = gerar_embeddings(df["texto"].tolist())
@@ -485,8 +483,6 @@ def main():
                     help="Apaga e recria coleção Qdrant")
     ap.add_argument("--testar",          action="store_true",
                     help="Roda perguntas de teste após indexar")
-    ap.add_argument("--sem-ocr",         action="store_true",
-                    help="Desabilita OCR no parser (mais rápido)")
     ap.add_argument("--workers",         type=int, default=16,
                     help="Workers do parser (padrão: 16)")
     ap.add_argument(
@@ -496,8 +492,7 @@ def main():
     )
     args = ap.parse_args()
 
-    usar_ocr  = not args.sem_ocr
-    inicio    = time.time()
+    inicio = time.time()
 
     log.info("=" * 55)
     log.info("RAG ANEEL — SETUP PIPELINE COMPLETO")
@@ -541,7 +536,7 @@ def main():
 
     # ── P1d: Parser PDFs ─────────────────────────────────────────────
     if rodar_parser_flag:
-        if not rodar_parser(args.limite, usar_ocr, args.workers):
+        if not rodar_parser(args.limite, args.workers):
             log.error("Parser falhou.")
             sys.exit(1)
 
@@ -568,8 +563,10 @@ def main():
     log.info("=" * 55)
     log.info(f"PIPELINE COMPLETO em {h}h {m}min")
     log.info("=" * 55)
-    log.info("Próximo passo: implementar o agente da P3")
-    log.info("  from src.p2_search.p2_indexar import conectar_qdrant, carregar_indices, buscar")
+    log.info("Próximo passo:")
+    log.info("  python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000  # inicia a API FastAPI")
+    log.info("  python -m streamlit run app.py      # inicia a UI")
+    log.info("  python src/evaluation/eval_runner.py --limite 10  # avaliação rápida")
 
 
 if __name__ == "__main__":
